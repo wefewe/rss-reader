@@ -11,7 +11,7 @@ from apscheduler.triggers.cron import CronTrigger
 from .config import settings
 from .database import init_db
 from .feed_crawler import init_default_sources, refresh_all_feeds, run_daily_brief_job
-from .api import router as api_router
+from .api import router as api_router, public_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -63,6 +63,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(public_router)
 app.include_router(api_router)
 
 # Mount Static Frontend if built
@@ -77,7 +78,7 @@ if os.path.exists(static_dir):
     logger.info(f"Mounting static files from {static_dir}")
     app.mount("/assets", StaticFiles(directory=os.path.join(static_dir, "assets")), name="assets")
 
-    @app.get("/{full_path:path}")
+    @app.api_route("/{full_path:path}", methods=["GET", "HEAD"])
     async def serve_spa(full_path: str):
         file_path = os.path.join(static_dir, full_path)
         if full_path and os.path.exists(file_path) and os.path.isfile(file_path):

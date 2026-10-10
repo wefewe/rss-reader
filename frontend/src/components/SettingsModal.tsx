@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
-import { X, Settings, Check, ShieldCheck, Sparkles, Sliders } from 'lucide-react';
+import { X, Settings, Check, ShieldCheck, Sparkles, Sliders, LogOut } from 'lucide-react';
 import { ReaderPreferences } from '../types';
-import { updateReaderPreferences } from '../api';
+import { updateReaderPreferences, logout } from '../api';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -175,21 +175,37 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         </div>
 
         {/* Footer */}
-        <div className="p-4 px-6 border-t border-surfaceBorder flex items-center justify-end gap-2 bg-surfaceRaised/40">
+        <div className="p-4 px-6 border-t border-surfaceBorder flex items-center justify-between bg-surfaceRaised/40">
           <button
-            onClick={onClose}
-            className="px-4 py-1.5 rounded-lg hover:bg-surfaceBorder text-xs text-textMuted hover:text-textPrimary transition-colors"
+            type="button"
+            onClick={async () => {
+              if (confirm('确定要退出当前阅读器会话吗？')) {
+                await logout();
+                onClose();
+              }
+            }}
+            className="px-3 py-1.5 rounded-lg border border-surfaceBorder hover:bg-accentRed/10 hover:text-accentRed hover:border-accentRed/30 text-xs text-textMuted transition-colors flex items-center gap-1.5"
           >
-            取消
+            <LogOut size={13} />
+            <span>退出登录</span>
           </button>
-          <button
-            onClick={handleSave}
-            disabled={isSaving}
-            className="px-4 py-1.5 rounded-lg bg-accent text-white text-xs font-medium hover:bg-accent/90 transition-colors flex items-center gap-1.5"
-          >
-            <Check size={14} />
-            <span>{isSaving ? "正在保存..." : "保存更改"}</span>
-          </button>
+
+          <div className="flex items-center gap-2">
+            <button
+              onClick={onClose}
+              className="px-4 py-1.5 rounded-lg hover:bg-surfaceBorder text-xs text-textMuted hover:text-textPrimary transition-colors"
+            >
+              取消
+            </button>
+            <button
+              onClick={handleSave}
+              disabled={isSaving}
+              className="px-4 py-1.5 rounded-lg bg-accent text-white text-xs font-medium hover:bg-accent/90 transition-colors flex items-center gap-1.5"
+            >
+              <Check size={14} />
+              <span>{isSaving ? "正在保存..." : "保存更改"}</span>
+            </button>
+          </div>
         </div>
       </div>
     </div>

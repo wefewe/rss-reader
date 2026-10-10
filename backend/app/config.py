@@ -7,6 +7,10 @@ class Settings(BaseSettings):
     DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite+aiosqlite:////data/reader.db")
     SECRET_KEY: str = os.getenv("SECRET_KEY", "rss_reader_secret_key")
     
+    # Authentication
+    READER_PASSWORD: str = os.getenv("READER_PASSWORD", "")
+    READER_API_KEY: str = os.getenv("READER_API_KEY", "")
+
     # LLM Settings (AxonHub OpenAI compatible)
     LLM_BASE_URL: str = os.getenv("LLM_BASE_URL", "http://axonhub:8090/v1")
     LLM_API_KEY: str = os.getenv("LLM_API_KEY", "")

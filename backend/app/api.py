@@ -20,14 +20,53 @@ from .schemas import (
     MarkAllReadInput,
     UpdateReaderPreferencesInput,
     DigestRecordSchema,
+    LoginInput,
 )
 from .feed_crawler import refresh_all_feeds, parse_date, clean_html, enrich_new_articles, run_daily_brief_job
 from .content_extractor import extract_fulltext_from_url
 from .ai_service import ai_service
+from .auth import require_auth, create_auth_token, verify_auth_token, TOKEN_VALIDITY_SECONDS
+from .config import settings
 import asyncio
 
 logger = logging.getLogger("rss_reader.api")
-router = APIRouter(prefix="/api/reader", tags=["reader"])
+
+# Public Router (no auth required)
+public_router = APIRouter(prefix="/api/reader", tags=["public"])
+
+# Protected Router (auth required)
+router = APIRouter(prefix="/api/reader", tags=["reader"], dependencies=[Depends(require_auth)])
+
+# --- Authentication Endpoints (Public) ---
+@public_router.post("/auth/login")
+async def auth_login(body: LoginInput):
+    if not settings.READER_PASSWORD:
+        return {"status": "ok", "token": "no_auth_required", "expires_in": TOKEN_VALIDITY_SECONDS}
+    
+    if body.password == settings.READER_PASSWORD:
+        token = create_auth_token()
+        return {"status": "ok", "token": token, "expires_in": TOKEN_VALIDITY_SECONDS}
+    
+    raise HTTPException(status_code=401, detail="密码错误，请重新输入")
+
+@public_router.get("/auth/check")
+async def auth_check(request: Request):
+    if not settings.READER_PASSWORD:
+        return {"status": "ok", "authed": True, "auth_required": False}
+    auth_header = request.headers.get("Authorization")
+    if auth_header and auth_header.startswith("Bearer "):
+        token = auth_header.replace("Bearer ", "").strip()
+        if verify_auth_token(token):
+            return {"status": "ok", "authed": True, "auth_required": True}
+    return {"status": "ok", "authed": False, "auth_required": True}
+
+@public_router.post("/auth/logout")
+async def auth_logout():
+    return {"status": "ok", "message": "已退出登录"}
+
+@public_router.get("/health")
+async def health_check():
+    return {"status": "healthy", "service": "rss-reader", "timestamp": datetime.datetime.utcnow().isoformat()}
 
 # Helper: recalculate unread counts
 async def update_source_counters(session: AsyncSession, source_id: str):

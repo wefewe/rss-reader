@@ -128,6 +128,9 @@ class MarkAllReadInput(BaseModel):
 class UpdateReaderPreferencesInput(BaseModel):
     preferences: Dict[str, Any]
 
+class LoginInput(BaseModel):
+    password: str
+
 class DigestRecordSchema(BaseModel):
     id: int
     date: str

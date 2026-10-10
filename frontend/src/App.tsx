@@ -4,6 +4,7 @@ import { ArticleList } from './components/ArticleList';
 import { ReaderView } from './components/ReaderView';
 import { MorningBriefModal } from './components/MorningBriefModal';
 import { SettingsModal } from './components/SettingsModal';
+import { LoginScreen } from './components/LoginScreen';
 import { Article, FeedSource, ReaderPreferences, ViewType } from './types';
 import { 
   listReader, 
@@ -14,10 +15,14 @@ import {
   setArticleFeedback, 
   markAllRead,
   fetchArticleFullText,
-  summarizeArticle
+  summarizeArticle,
+  checkAuth,
 } from './api';
 
 export const App: React.FC = () => {
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(true);
+  const [isCheckingAuth, setIsCheckingAuth] = useState<boolean>(true);
+
   const [articles, setArticles] = useState<Article[]>([]);
   const [sources, setSources] = useState<FeedSource[]>([]);
   const [preferences, setPreferences] = useState<ReaderPreferences>({
@@ -44,8 +49,32 @@ export const App: React.FC = () => {
   const [isLoadingFullText, setIsLoadingFullText] = useState<boolean>(false);
   const [isLoadingSummary, setIsLoadingSummary] = useState<boolean>(false);
 
+  // Check Auth on Mount
+  useEffect(() => {
+    const runAuthCheck = async () => {
+      setIsCheckingAuth(true);
+      const res = await checkAuth();
+      if (res.auth_required && !res.authed) {
+        setIsAuthenticated(false);
+      } else {
+        setIsAuthenticated(true);
+      }
+      setIsCheckingAuth(false);
+    };
+
+    runAuthCheck();
+
+    const handleUnauthorized = () => {
+      setIsAuthenticated(false);
+    };
+
+    window.addEventListener('reader_unauthorized', handleUnauthorized);
+    return () => window.removeEventListener('reader_unauthorized', handleUnauthorized);
+  }, []);
+
   // Load Reader Data
   const loadData = useCallback(async () => {
+    if (!isAuthenticated) return;
     try {
       const data = await listReader({
         group_name: currentGroup,
@@ -64,11 +93,13 @@ export const App: React.FC = () => {
     } catch (e) {
       console.error('Failed to load reader data:', e);
     }
-  }, [currentGroup, currentSourceId, currentView, searchQuery, selectedArticleId]);
+  }, [isAuthenticated, currentGroup, currentSourceId, currentView, searchQuery, selectedArticleId]);
 
   useEffect(() => {
-    loadData();
-  }, [loadData]);
+    if (isAuthenticated) {
+      loadData();
+    }
+  }, [isAuthenticated, loadData]);
 
   // Selected Article Object
   const selectedArticle = useMemo(() => {
@@ -223,6 +254,21 @@ export const App: React.FC = () => {
   const totalUnread = useMemo(() => {
     return sources.reduce((acc, s) => acc + s.unread_count, 0);
   }, [sources]);
+
+  if (isCheckingAuth) {
+    return (
+      <div className="h-screen w-screen bg-background flex items-center justify-center text-textMuted text-xs select-none">
+        <div className="flex flex-col items-center gap-3">
+          <div className="w-6 h-6 border-2 border-accent border-t-transparent rounded-full animate-spin" />
+          <span className="font-mono text-textMuted/70">正在载入数字图书馆...</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return <LoginScreen onLoginSuccess={() => setIsAuthenticated(true)} />;
+  }
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-background text-textPrimary">
