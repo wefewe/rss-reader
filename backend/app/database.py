@@ -1,0 +1,41 @@
+import os
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
+from sqlalchemy.orm import declarative_base
+from sqlalchemy import text
+from .config import settings
+
+# If sqlite, ensure directory exists
+if settings.DATABASE_URL.startswith("sqlite"):
+    db_path = settings.DATABASE_URL.replace("sqlite+aiosqlite:///", "")
+    if db_path.startswith("/"):
+        dir_name = os.path.dirname(db_path)
+        if dir_name:
+            os.makedirs(dir_name, exist_ok=True)
+
+engine = create_async_engine(
+    settings.DATABASE_URL,
+    echo=False,
+    future=True,
+    pool_pre_ping=True
+)
+
+async_session = async_sessionmaker(
+    engine, expire_on_commit=False, class_=AsyncSession
+)
+
+Base = declarative_base()
+
+async def init_db():
+    async with engine.begin() as conn:
+        if settings.DATABASE_URL.startswith("sqlite"):
+            # Enable WAL mode for high concurrency
+            await conn.execute(text("PRAGMA journal_mode=WAL;"))
+            await conn.execute(text("PRAGMA synchronous=NORMAL;"))
+        await conn.run_sync(Base.metadata.create_all)
+
+async def get_db():
+    async with async_session() as session:
+        try:
+            yield session
+        finally:
+            await session.close()
