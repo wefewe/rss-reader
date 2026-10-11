@@ -32,6 +32,12 @@ async def init_db():
             await conn.execute(text("PRAGMA journal_mode=WAL;"))
             await conn.execute(text("PRAGMA synchronous=NORMAL;"))
         await conn.run_sync(Base.metadata.create_all)
+        # Migration: ensure muted_keywords column exists on reader_preferences
+        try:
+            await conn.execute(text("ALTER TABLE reader_preferences ADD COLUMN muted_keywords JSON DEFAULT '[]';"))
+        except Exception:
+            pass
+
 
 async def get_db():
     async with async_session() as session:

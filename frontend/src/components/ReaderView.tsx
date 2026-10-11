@@ -24,6 +24,7 @@ import {
 import ReactMarkdown from 'react-markdown';
 import { Article } from '../types';
 import { DiscussionPosts } from './DiscussionPosts';
+import { ArticleAiAssistant } from './ArticleAiAssistant';
 
 interface ReaderViewProps {
   article: Article | null;
@@ -411,6 +412,13 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
               </div>
             )}
           </div>
+
+          {/* AI Conversational Assistant & Action Item Extraction */}
+          <ArticleAiAssistant 
+            article={article} 
+            fontFamily={fontFamily} 
+            fontSize={fontSize} 
+          />
 
           {/* Lead Image with Lightbox click */}
           {article.image_url && (

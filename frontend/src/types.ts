@@ -66,6 +66,12 @@ export interface ReaderPreferences {
   pure_rule_mode: boolean;
   summary_model: string;
   brief_model: string;
+  muted_keywords?: string[];
+}
+
+export interface AiChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
 }
 
 export interface DigestRecord {

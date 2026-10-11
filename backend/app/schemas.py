@@ -80,6 +80,7 @@ class ReaderPreferencesSchema(BaseModel):
     pure_rule_mode: bool = False
     summary_model: str = "deepseek-v4.1-flash"
     brief_model: str = "gpt-5.6-terra"
+    muted_keywords: List[str] = []
 
     class Config:
         from_attributes = True
@@ -130,6 +131,15 @@ class UpdateReaderPreferencesInput(BaseModel):
 
 class LoginInput(BaseModel):
     password: str
+
+class AskArticleInput(BaseModel):
+    id: str
+    question: str
+    history: Optional[List[Dict[str, str]]] = []
+
+class AskArticleResponse(BaseModel):
+    status: str = "ok"
+    answer: str
 
 class DigestRecordSchema(BaseModel):
     id: int

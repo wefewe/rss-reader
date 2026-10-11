@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { X, Settings, Check, ShieldCheck, Sparkles, Sliders, LogOut } from 'lucide-react';
+import { X, Settings, Check, ShieldCheck, Sparkles, Sliders, LogOut, VolumeX, Plus } from 'lucide-react';
 import { ReaderPreferences } from '../types';
 import { updateReaderPreferences, logout } from '../api';
 
@@ -17,6 +17,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onPreferencesUpdated,
 }) => {
   const [form, setForm] = useState<ReaderPreferences>(preferences);
+  const [newKeyword, setNewKeyword] = useState<string>('');
   const [isSaving, setIsSaving] = useState(false);
 
   React.useEffect(() => {
@@ -24,6 +25,21 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   }, [preferences]);
 
   if (!isOpen) return null;
+
+  const handleAddKeyword = () => {
+    const kw = newKeyword.trim();
+    if (!kw) return;
+    const current = form.muted_keywords || [];
+    if (!current.includes(kw)) {
+      setForm({ ...form, muted_keywords: [...current, kw] });
+    }
+    setNewKeyword('');
+  };
+
+  const handleRemoveKeyword = (kwToRemove: string) => {
+    const current = form.muted_keywords || [];
+    setForm({ ...form, muted_keywords: current.filter(k => k !== kwToRemove) });
+  };
 
   const handleSave = async () => {
     setIsSaving(true);
@@ -126,6 +142,68 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   className="rounded border-surfaceBorder text-accent focus:ring-0 w-4 h-4 cursor-pointer"
                 />
               </label>
+            </div>
+          </div>
+
+          {/* Muted Keywords section */}
+          <div className="space-y-3">
+            <h3 className="font-semibold text-textMuted uppercase tracking-wider text-[11px] flex items-center gap-1.5">
+              <VolumeX size={13} className="text-accentRed" />
+              关键词静音与黑名单 (Keyword Mute)
+            </h3>
+            <div className="space-y-3 bg-surfaceRaised/50 p-3.5 rounded-xl border border-surfaceBorder">
+              <p className="text-[11px] text-textMuted">
+                包含所设关键词的文章将自动降权并收拢至“低价值折叠”层，绝不打扰常驻精选阅读。
+              </p>
+
+              {/* Tag Cloud */}
+              <div className="flex items-center gap-1.5 flex-wrap min-h-[30px]">
+                {form.muted_keywords && form.muted_keywords.length > 0 ? (
+                  form.muted_keywords.map((kw, idx) => (
+                    <span 
+                      key={idx}
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-surface border border-surfaceBorder text-textPrimary text-xs shadow-2xs"
+                    >
+                      <span>{kw}</span>
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveKeyword(kw)}
+                        className="text-textMuted hover:text-accentRed transition-colors"
+                      >
+                        <X size={12} />
+                      </button>
+                    </span>
+                  ))
+                ) : (
+                  <span className="text-[11px] text-textMuted/60 italic">暂无静音关键词</span>
+                )}
+              </div>
+
+              {/* Add Input */}
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={newKeyword}
+                  onChange={(e) => setNewKeyword(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      handleAddKeyword();
+                    }
+                  }}
+                  placeholder="输入静音词（如：拼多多、邀请码、助力）后按回车..."
+                  className="flex-1 bg-surface border border-surfaceBorder rounded-lg px-3 py-1.5 text-xs text-textPrimary focus:outline-none focus:border-accent"
+                />
+                <button
+                  type="button"
+                  onClick={handleAddKeyword}
+                  disabled={!newKeyword.trim()}
+                  className="px-3 py-1.5 rounded-lg bg-surfaceRaised hover:bg-surfaceBorder border border-surfaceBorder text-xs text-textPrimary hover:text-accent disabled:opacity-40 transition-colors flex items-center gap-1"
+                >
+                  <Plus size={13} />
+                  <span>添加</span>
+                </button>
+              </div>
             </div>
           </div>
 

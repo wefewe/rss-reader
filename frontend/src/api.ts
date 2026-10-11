@@ -179,3 +179,18 @@ export async function getDailyBriefs(): Promise<DigestRecord[]> {
   const data = await res.json();
   return data.briefs || [];
 }
+
+export async function askArticle(
+  id: string,
+  question: string,
+  history?: { role: string; content: string }[]
+): Promise<string> {
+  const res = await request(`${API_BASE}/article/ask`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id, question, history: history || [] }),
+  });
+  const data = await res.json();
+  return data.answer || '未能获取回答，请稍后重试。';
+}
+

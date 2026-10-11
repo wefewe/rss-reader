@@ -21,6 +21,8 @@ from .schemas import (
     UpdateReaderPreferencesInput,
     DigestRecordSchema,
     LoginInput,
+    AskArticleInput,
+    AskArticleResponse,
 )
 from .feed_crawler import refresh_all_feeds, parse_date, clean_html, enrich_new_articles, run_daily_brief_job
 from .content_extractor import extract_fulltext_from_url
@@ -121,6 +123,60 @@ async def list_reader(
     res = await db.execute(stmt)
     articles = res.scalars().all()
 
+    # Dynamic feedback bias (赞踩增量学习与偏好加权)
+    fb_res = await db.execute(
+        select(Article.source_id, Article.group_name, Article.feedback)
+        .where(Article.feedback.is_not(None))
+    )
+    feedbacks = fb_res.all()
+    source_bias = {}
+    group_bias = {}
+    for src_id, grp, fb in feedbacks:
+        val = 0.08 if fb == "like" else (-0.15 if fb == "dislike" else 0.0)
+        source_bias[src_id] = source_bias.get(src_id, 0.0) + val
+        group_bias[grp] = group_bias.get(grp, 0.0) + (val * 0.5)
+
+    for k in source_bias:
+        source_bias[k] = max(-0.25, min(0.25, source_bias[k]))
+    for k in group_bias:
+        group_bias[k] = max(-0.2, min(0.2, group_bias[k]))
+
+    # Muted keywords (静音规则过滤)
+    muted_kws = [k.lower().strip() for k in (pref.muted_keywords or []) if k and k.strip()]
+
+    article_schemas = []
+    for a in articles:
+        schema = ArticleSchema.model_validate(a)
+
+        matched_mute = None
+        if muted_kws:
+            haystack = f"{a.title} {a.summary or ''}".lower()
+            for kw in muted_kws:
+                if kw in haystack:
+                    matched_mute = kw
+                    break
+
+        if matched_mute:
+            schema.value_tier = "hidden"
+            schema.rank_score = max(0.0, round(schema.rank_score - 0.5, 2))
+            signals = list(schema.triage_signals or [])
+            signals.append({
+                "dimension": "quality",
+                "effect": -0.5,
+                "evidence": f"触发静音关键词: {matched_mute}",
+                "label": "关键词静音"
+            })
+            schema.triage_signals = signals
+        else:
+            bias = source_bias.get(a.source_id, 0.0) + group_bias.get(a.group_name, 0.0)
+            if bias != 0:
+                schema.rank_score = max(0.0, min(1.0, round(schema.rank_score + bias, 2)))
+
+        article_schemas.append(schema)
+
+    # Re-sort after applying feedback bias & mute penalty
+    article_schemas.sort(key=lambda x: (x.rank_score, x.published_at), reverse=True)
+
     # Query sources
     src_res = await db.execute(select(FeedSource))
     sources = src_res.scalars().all()
@@ -131,7 +187,7 @@ async def list_reader(
     ).isoformat()
 
     return {
-        "articles": [ArticleSchema.model_validate(a) for a in articles],
+        "articles": article_schemas,
         "sources": [FeedSourceSchema.model_validate(s) for s in sources],
         "preferences": ReaderPreferencesSchema.model_validate(pref),
         "last_checked_at": last_checked,
@@ -422,6 +478,33 @@ async def get_daily_briefs(limit: int = 10, db: AsyncSession = Depends(get_db)):
     res = await db.execute(select(DigestRecord).order_by(desc(DigestRecord.id)).limit(limit))
     items = res.scalars().all()
     return {"briefs": [DigestRecordSchema.model_validate(b) for b in items]}
+
+# 14. ask_article
+@router.post("/article/ask", response_model=AskArticleResponse)
+async def ask_article_endpoint(body: AskArticleInput, db: AsyncSession = Depends(get_db)):
+    art_id = body.id
+    article = await db.get(Article, art_id)
+    if not article:
+        stmt = select(Article).where(Article.url == art_id).limit(1)
+        res = await db.execute(stmt)
+        article = res.scalars().first()
+
+    if not article:
+        raise HTTPException(status_code=404, detail="文章未找到")
+
+    pref = await db.get(ReaderPreference, 1)
+    model = pref.summary_model if pref else "deepseek-v4.1-flash"
+
+    text_to_use = article.content or article.summary or ""
+    answer = await ai_service.ask_article(
+        title=article.title,
+        text=text_to_use,
+        question=body.question,
+        history=body.history or [],
+        discussion_posts=article.discussion_posts or [],
+        model=model
+    )
+    return {"status": "ok", "answer": answer}
 
 @router.get("/health")
 async def health_check():

@@ -67,6 +67,54 @@ class AIService:
         res = await self._call_llm(model, messages, temperature=0.2, max_tokens=600)
         return res or "摘要生成失败或超时，请参考原文。"
 
+    async def ask_article(
+        self,
+        title: str,
+        text: str,
+        question: str,
+        history: List[Dict[str, str]] = None,
+        discussion_posts: List[Dict[str, Any]] = None,
+        model: Optional[str] = None
+    ) -> str:
+        """
+        Answers a user question based on the article content, summary, and community discussions.
+        """
+        model = model or self.summary_model or "deepseek-v4.1-flash"
+        history = history or []
+        discussion_posts = discussion_posts or []
+
+        disc_text = ""
+        if discussion_posts:
+            disc_lines = []
+            for p in discussion_posts[:15]:
+                disc_lines.append(f"#{p.get('post_number', 0)} {p.get('author', '匿名')}: {p.get('content', '')[:200]}")
+            disc_text = "\n\n【社区高赞/热门回帖讨论】:\n" + "\n".join(disc_lines)
+
+        content_snippet = text[:6000] if text else "无正文"
+
+        system_prompt = f"""你是一位敏锐、实事求是且精通技术的私人数字阅读助理。
+用户正在阅读以下文章：
+《{title}》
+
+【文章全文与背景内容】：
+{content_snippet}
+{disc_text}
+
+【你的职责与回答规范】：
+1. 紧密基于上述文章和楼层讨论回答，不编造不存在的事实；
+2. 若用户要求“提取行动清单”或“落地步骤”，请以 Markdown 任务列表（如 - [ ] 或有序列表）给出具体、可执行的操作；
+3. 若用户提问关于“核心争议/讨论风向/大家怎么看”，请综合整理文中观点与楼层回复；
+4. 若文章未包含相关内容，请实事求是说明“文章中未明确提及”，并基于常识简短补充；
+5. 回答精炼、排版清晰，使用中文 Markdown 输出。"""
+
+        messages = [{"role": "system", "content": system_prompt}]
+        for h in history[-6:]:
+            messages.append({"role": h.get("role", "user"), "content": h.get("content", "")})
+
+        messages.append({"role": "user", "content": question})
+        res = await self._call_llm(model, messages, temperature=0.3, max_tokens=1000)
+        return res or "AI 问答服务响应超时，请稍后重试。"
+
     async def triage_article(
         self,
         title: str,

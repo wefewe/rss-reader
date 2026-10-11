@@ -88,6 +88,7 @@ class ReaderPreference(Base):
     pure_rule_mode = Column(Boolean, default=False)
     summary_model = Column(String(100), default="deepseek-v4.1-flash")
     brief_model = Column(String(100), default="gpt-5.6-terra")
+    muted_keywords = Column(JSON, default=list)
 
 class DigestRecord(Base):
     __tablename__ = "digest_records"
