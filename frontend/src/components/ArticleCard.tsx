@@ -40,6 +40,7 @@ export const ArticleCard: React.FC<ArticleCardProps> = ({
 
   return (
     <div
+      id={`article-card-${article.id}`}
       onClick={onSelect}
       className={`p-3.5 border-b border-surfaceBorder cursor-pointer transition-all relative select-none ${
         isSelected

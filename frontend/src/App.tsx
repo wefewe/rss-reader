@@ -5,6 +5,7 @@ import { ReaderView } from './components/ReaderView';
 import { MorningBriefModal } from './components/MorningBriefModal';
 import { SettingsModal } from './components/SettingsModal';
 import { LoginScreen } from './components/LoginScreen';
+import { ShortcutHelpModal } from './components/ShortcutHelpModal';
 import { Article, FeedSource, ReaderPreferences, ViewType, ThemeMode } from './types';
 import { 
   listReader, 
@@ -25,6 +26,13 @@ export const App: React.FC = () => {
   const [theme, setTheme] = useState<ThemeMode>(() => {
     return (localStorage.getItem('reader_theme') as ThemeMode) || 'dark';
   });
+
+  // Responsive mobile navigation view state: 'sidebar' | 'list' | 'reader'
+  const [mobileView, setMobileView] = useState<'sidebar' | 'list' | 'reader'>('list');
+  // Desktop Zen / Focus mode state
+  const [isZenMode, setIsZenMode] = useState<boolean>(false);
+  // Keyboard shortcut modal state
+  const [isShortcutHelpOpen, setIsShortcutHelpOpen] = useState<boolean>(false);
 
   const [articles, setArticles] = useState<Article[]>([]);
   const [sources, setSources] = useState<FeedSource[]>([]);
@@ -96,8 +104,8 @@ export const App: React.FC = () => {
       setSources(data.sources);
       if (data.preferences) setPreferences(data.preferences);
 
-      // Select first article if none selected
-      if (data.articles.length > 0 && !selectedArticleId) {
+      // Select first article if none selected on desktop
+      if (data.articles.length > 0 && !selectedArticleId && window.innerWidth >= 768) {
         setSelectedArticleId(data.articles[0].id);
       }
     } catch (e) {
@@ -119,12 +127,12 @@ export const App: React.FC = () => {
   // Handle Mark Read on selection
   const handleSelectArticle = useCallback(async (article: Article) => {
     setSelectedArticleId(article.id);
+    setMobileView('reader'); // Slide into reader on mobile
+
     if (!article.is_read) {
-      // Optimistic update
       setArticles(prev => prev.map(a => a.id === article.id ? { ...a, is_read: true } : a));
       try {
         await setArticleRead(article.id, true);
-        // Update local source unread count
         setSources(prev => prev.map(s => {
           if (s.id === article.source_id) {
             return { ...s, unread_count: Math.max(0, s.unread_count - 1) };
@@ -165,7 +173,7 @@ export const App: React.FC = () => {
     setIsRefreshing(true);
     try {
       await refreshFeeds();
-      setTimeout(loadData, 2000); // Poll after 2s
+      setTimeout(loadData, 2000);
     } catch (e) {
       console.error(e);
     } finally {
@@ -215,33 +223,31 @@ export const App: React.FC = () => {
   // Keyboard navigation shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Ignore if typing in an input
       if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName)) {
+        if (e.key === 'Escape') {
+          (e.target as HTMLElement).blur();
+        }
         return;
       }
 
       if (e.key === 'j' || e.key === 'J') {
-        // Next article
         e.preventDefault();
         const currentIndex = articles.findIndex(a => a.id === selectedArticleId);
         if (currentIndex < articles.length - 1) {
           handleSelectArticle(articles[currentIndex + 1]);
         }
       } else if (e.key === 'k' || e.key === 'K') {
-        // Previous article
         e.preventDefault();
         const currentIndex = articles.findIndex(a => a.id === selectedArticleId);
         if (currentIndex > 0) {
           handleSelectArticle(articles[currentIndex - 1]);
         }
       } else if (e.key === 's' || e.key === 'S') {
-        // Star article
         if (selectedArticleId) {
           e.preventDefault();
           handleToggleStar(selectedArticleId);
         }
       } else if (e.key === 'm' || e.key === 'M') {
-        // Toggle read
         if (selectedArticle) {
           e.preventDefault();
           const nextState = !selectedArticle.is_read;
@@ -249,11 +255,22 @@ export const App: React.FC = () => {
           setArticleRead(selectedArticle.id, nextState);
         }
       } else if (e.key === 'o' || e.key === 'O') {
-        // Open original URL in new tab
         if (selectedArticle?.url) {
           e.preventDefault();
           window.open(selectedArticle.url, '_blank', 'noopener,noreferrer');
         }
+      } else if (e.key === 'z' || e.key === 'Z') {
+        e.preventDefault();
+        setIsZenMode(prev => !prev);
+      } else if (e.key === '?') {
+        e.preventDefault();
+        setIsShortcutHelpOpen(prev => !prev);
+      } else if (e.key === '/') {
+        e.preventDefault();
+        document.getElementById('article-search-input')?.focus();
+      } else if (e.key === 'Escape') {
+        setIsShortcutHelpOpen(false);
+        setIsZenMode(false);
       }
     };
 
@@ -282,57 +299,83 @@ export const App: React.FC = () => {
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-background text-textPrimary">
-      {/* 1. Left Sidebar */}
-      <Sidebar
-        sources={sources}
-        currentGroup={currentGroup}
-        currentSourceId={currentSourceId}
-        currentView={currentView}
-        currentTheme={theme}
-        onSelectGroup={(g) => { setCurrentGroup(g); setCurrentSourceId(''); }}
-        onSelectSource={(s) => setCurrentSourceId(s)}
-        onSelectView={(v) => setCurrentView(v)}
-        onSelectTheme={setTheme}
-        onRefresh={handleRefresh}
-        onOpenBrief={() => setIsBriefModalOpen(true)}
-        onOpenSettings={() => setIsSettingsModalOpen(true)}
-        onMarkAllRead={handleMarkAllRead}
-        isRefreshing={isRefreshing}
-        totalUnread={totalUnread}
-      />
+      {/* 1. Left Sidebar (responsive mobile drawer / desktop column) */}
+      <div className={`h-full shrink-0 ${
+        mobileView === 'sidebar' ? 'w-full block' : 'hidden'
+      } md:block ${isZenMode ? 'md:hidden' : ''}`}>
+        <Sidebar
+          sources={sources}
+          currentGroup={currentGroup}
+          currentSourceId={currentSourceId}
+          currentView={currentView}
+          currentTheme={theme}
+          onSelectGroup={(g) => { 
+            setCurrentGroup(g); 
+            setCurrentSourceId(''); 
+            setMobileView('list'); 
+          }}
+          onSelectSource={(s) => { 
+            setCurrentSourceId(s); 
+            setMobileView('list'); 
+          }}
+          onSelectView={(v) => { 
+            setCurrentView(v); 
+            setMobileView('list'); 
+          }}
+          onSelectTheme={setTheme}
+          onRefresh={handleRefresh}
+          onOpenBrief={() => setIsBriefModalOpen(true)}
+          onOpenSettings={() => setIsSettingsModalOpen(true)}
+          onMarkAllRead={handleMarkAllRead}
+          isRefreshing={isRefreshing}
+          totalUnread={totalUnread}
+        />
+      </div>
 
       {/* 2. Middle Article List Column */}
-      <ArticleList
-        articles={articles}
-        selectedArticleId={selectedArticleId}
-        onSelectArticle={handleSelectArticle}
-        onToggleStar={handleToggleStar}
-        onFeedback={handleFeedback}
-        onMarkAllRead={handleMarkAllRead}
-        searchQuery={searchQuery}
-        onSearchChange={setSearchQuery}
-        currentView={currentView}
-        filterTier={filterTier}
-        onFilterTierChange={setFilterTier}
-      />
+      <div className={`h-full shrink-0 ${
+        mobileView === 'list' ? 'w-full block' : 'hidden'
+      } md:block ${isZenMode ? 'md:hidden' : ''}`}>
+        <ArticleList
+          articles={articles}
+          selectedArticleId={selectedArticleId}
+          onSelectArticle={handleSelectArticle}
+          onToggleStar={handleToggleStar}
+          onFeedback={handleFeedback}
+          onMarkAllRead={handleMarkAllRead}
+          searchQuery={searchQuery}
+          onSearchChange={setSearchQuery}
+          currentView={currentView}
+          filterTier={filterTier}
+          onFilterTierChange={setFilterTier}
+          onBackToSidebar={() => setMobileView('sidebar')}
+        />
+      </div>
 
       {/* 3. Right Immersive Reading Panel */}
-      <ReaderView
-        article={selectedArticle}
-        onToggleRead={() => {
-          if (selectedArticle) {
-            const next = !selectedArticle.is_read;
-            setArticles(prev => prev.map(a => a.id === selectedArticle.id ? { ...a, is_read: next } : a));
-            setArticleRead(selectedArticle.id, next);
-          }
-        }}
-        onToggleStar={() => selectedArticleId && handleToggleStar(selectedArticleId)}
-        onFeedback={(type) => selectedArticleId && handleFeedback(selectedArticleId, type)}
-        onFetchFullText={handleFetchFullText}
-        onSummarize={handleSummarize}
-        isLoadingFullText={isLoadingFullText}
-        isLoadingSummary={isLoadingSummary}
-      />
+      <div className={`h-full flex-1 ${
+        mobileView === 'reader' ? 'w-full flex' : 'hidden'
+      } md:flex`}>
+        <ReaderView
+          article={selectedArticle}
+          onToggleRead={() => {
+            if (selectedArticle) {
+              const next = !selectedArticle.is_read;
+              setArticles(prev => prev.map(a => a.id === selectedArticle.id ? { ...a, is_read: next } : a));
+              setArticleRead(selectedArticle.id, next);
+            }
+          }}
+          onToggleStar={() => selectedArticleId && handleToggleStar(selectedArticleId)}
+          onFeedback={(type) => selectedArticleId && handleFeedback(selectedArticleId, type)}
+          onFetchFullText={handleFetchFullText}
+          onSummarize={handleSummarize}
+          isLoadingFullText={isLoadingFullText}
+          isLoadingSummary={isLoadingSummary}
+          onBackToList={() => setMobileView('list')}
+          isZenMode={isZenMode}
+          onToggleZenMode={() => setIsZenMode(prev => !prev)}
+        />
+      </div>
 
       {/* Modals */}
       <MorningBriefModal
@@ -345,6 +388,11 @@ export const App: React.FC = () => {
         onClose={() => setIsSettingsModalOpen(false)}
         preferences={preferences}
         onPreferencesUpdated={setPreferences}
+      />
+
+      <ShortcutHelpModal
+        isOpen={isShortcutHelpOpen}
+        onClose={() => setIsShortcutHelpOpen(false)}
       />
     </div>
   );

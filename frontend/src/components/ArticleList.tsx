@@ -1,5 +1,5 @@
-import React from 'react';
-import { Search, SlidersHorizontal, CheckCheck } from 'lucide-react';
+import React, { useEffect, useMemo } from 'react';
+import { Search, SlidersHorizontal, CheckCheck, ArrowLeft } from 'lucide-react';
 import { Article, ViewType } from '../types';
 import { ArticleCard } from './ArticleCard';
 
@@ -15,6 +15,7 @@ interface ArticleListProps {
   currentView: ViewType;
   filterTier: string;
   onFilterTierChange: (tier: string) => void;
+  onBackToSidebar?: () => void;
 }
 
 export const ArticleList: React.FC<ArticleListProps> = ({
@@ -28,9 +29,10 @@ export const ArticleList: React.FC<ArticleListProps> = ({
   onSearchChange,
   filterTier,
   onFilterTierChange,
+  onBackToSidebar,
 }) => {
   // Filter by value tier (featured / all / hidden)
-  const filteredArticles = React.useMemo(() => {
+  const filteredArticles = useMemo(() => {
     return articles.filter(a => {
       if (filterTier === 'featured') return a.value_tier === 'featured';
       if (filterTier === 'normal') return a.value_tier !== 'hidden';
@@ -39,19 +41,41 @@ export const ArticleList: React.FC<ArticleListProps> = ({
     });
   }, [articles, filterTier]);
 
+  // Keyboard J/K and navigation auto-scroll to keep active card in viewport
+  useEffect(() => {
+    if (selectedArticleId) {
+      const el = document.getElementById(`article-card-${selectedArticleId}`);
+      if (el) {
+        el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      }
+    }
+  }, [selectedArticleId]);
+
   return (
-    <div className="w-[380px] bg-background border-r border-surfaceBorder flex flex-col h-screen shrink-0">
+    <div className="w-full md:w-[360px] lg:w-[380px] bg-background border-r border-surfaceBorder flex flex-col h-screen shrink-0">
       {/* Search & Batch Actions Header */}
       <div className="p-3 border-b border-surfaceBorder space-y-2 bg-surface/30">
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-textMuted" size={14} />
-          <input
-            type="text"
-            placeholder="搜索文章标题或关键词..."
-            value={searchQuery}
-            onChange={(e) => onSearchChange(e.target.value)}
-            className="w-full bg-surface border border-surfaceBorder rounded-lg pl-8 pr-3 py-1.5 text-xs text-textPrimary placeholder:text-textMuted/60 focus:outline-none focus:border-accent"
-          />
+        <div className="flex items-center gap-2">
+          {onBackToSidebar && (
+            <button
+              onClick={onBackToSidebar}
+              className="md:hidden p-1.5 rounded-lg text-textMuted hover:text-textPrimary bg-surfaceRaised transition-colors"
+              title="返回订阅分类"
+            >
+              <ArrowLeft size={16} />
+            </button>
+          )}
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-textMuted" size={14} />
+            <input
+              id="article-search-input"
+              type="text"
+              placeholder="搜索标题或按 / 聚焦..."
+              value={searchQuery}
+              onChange={(e) => onSearchChange(e.target.value)}
+              className="w-full bg-surface border border-surfaceBorder rounded-lg pl-8 pr-3 py-1.5 text-xs text-textPrimary placeholder:text-textMuted/60 focus:outline-none focus:border-accent"
+            />
+          </div>
         </div>
 
         {/* Tier switcher pills */}

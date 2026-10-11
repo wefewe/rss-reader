@@ -38,6 +38,14 @@
   }
 }
 
+.font-reader-sans {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+.font-reader-serif {
+  font-family: "Noto Serif SC", "Songti SC", "SimSun", "STSong", Georgia, Cambria, serif;
+}
+
 /* Custom scrollbar */
 ::-webkit-scrollbar {
   width: 6px;
