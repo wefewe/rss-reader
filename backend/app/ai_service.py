@@ -67,16 +67,137 @@ class AIService:
         res = await self._call_llm(model, messages, temperature=0.2, max_tokens=600)
         return res or "摘要生成失败或超时，请参考原文。"
 
-    async def triage_article(self, title: str, text: str, source_title: str) -> Dict[str, Any]:
+    async def triage_article(
+        self,
+        title: str,
+        text: str,
+        source_title: str,
+        group_name: str = "",
+        discussion_posts: list = None,
+        extra_meta: dict = None
+    ) -> Dict[str, Any]:
         """
         Evaluates article value, quality, promotion tendency, and assigns triage tier.
+        Multi-layered funnel:
+        1. Deterministic rule pre-filtering (0 Token):
+           - Expired welfare/deals detection -> hidden
+           - Pure water / begging / referral invitation begging -> hidden
+           - Substantive open source / code / tutorial detection -> boost
+        2. Discourse community engagement weighting (posts count & sentiment)
+        3. LLM semantic triage for nuance
+        4. Fail-Open safety net
         """
+        discussion_posts = discussion_posts or []
+        extra_meta = extra_meta or {}
+        post_count = len(discussion_posts)
+        combined_text = f"{title}\n{text or ''}"
+        combined_lower = combined_text.lower()
+
+        # ── Layer 1: Expired Welfare & Deals Detection (羊毛时效门控) ──
+        is_welfare = (
+            group_name == "羊毛福利" or 
+            "福利" in source_title or 
+            "welfare" in extra_meta.get("source_id", "")
+        )
+        if is_welfare:
+            expired_keywords = [
+                "已失效", "已领完", "活动结束", "领光了", "优惠结束",
+                "翻车", "车翻了", "已结束", "已下架", "已封车", "无了", "被薅秃了"
+            ]
+            for kw in expired_keywords:
+                if kw in title or kw in (text or "")[:300]:
+                    return {
+                        "value_tier": "hidden",
+                        "value_score": 0.15,
+                        "quality_score": 0.4,
+                        "promotion_score": 0.5,
+                        "expiry_score": 1.0,
+                        "reason": f"时效检测：命中失效关键词「{kw}」",
+                        "signals": [
+                            {"dimension": "expiry", "effect": -0.85, "evidence": f"包含「{kw}」", "label": "活动失效"}
+                        ],
+                        "rank_score": 0.1
+                    }
+
+            # Check replies consensus (舆情反馈)
+            if post_count >= 2:
+                neg_replies = 0
+                for p in discussion_posts:
+                    content_p = p.get("content", "")
+                    if any(w in content_p for w in ["失效", "领完", "用不了", "黄了", "没了", "封了", "寄了"]):
+                        neg_replies += 1
+                if neg_replies >= 2:
+                    return {
+                        "value_tier": "hidden",
+                        "value_score": 0.2,
+                        "quality_score": 0.4,
+                        "promotion_score": 0.5,
+                        "expiry_score": 0.9,
+                        "reason": "舆情检测：多位楼层用户反馈优惠已失效",
+                        "signals": [
+                            {"dimension": "expiry", "effect": -0.8, "evidence": f"{neg_replies}条回帖反馈失效", "label": "回帖失效"}
+                        ],
+                        "rank_score": 0.15
+                    }
+
+        # ── Layer 2: Low-Quality / Spam / Referral Begging (纯求码与极短灌水) ──
+        begging_keywords = [
+            "求个邀请码", "求邀请码", "求个码", "求码", "求邀请",
+            "互点", "互助助力", "互点助力", "填我的邀请码", "帮点一下",
+            "帮我点下", "互赞", "互刷", "求带", "前排围观", "mark一下", "插眼"
+        ]
+        for bkw in begging_keywords:
+            if bkw in title or bkw in (text or "")[:200]:
+                return {
+                    "value_tier": "hidden",
+                    "value_score": 0.2,
+                    "quality_score": 0.2,
+                    "promotion_score": 0.8,
+                    "expiry_score": 0.0,
+                    "reason": f"低质过滤：纯求助/求码/互助帖「{bkw}」",
+                    "signals": [
+                        {"dimension": "quality", "effect": -0.8, "evidence": f"包含求助求码「{bkw}」", "label": "灌水求码"}
+                    ],
+                    "rank_score": 0.1
+                }
+
+        # Pure water short post (< 30 chars, no code, no links, 0 replies)
+        if len((text or "").strip()) < 30 and post_count <= 1:
+            if "http" not in combined_lower and "```" not in combined_text:
+                return {
+                    "value_tier": "hidden",
+                    "value_score": 0.3,
+                    "quality_score": 0.3,
+                    "promotion_score": 0.0,
+                    "expiry_score": 0.0,
+                    "reason": "低质过滤：内容过短且无实质信息",
+                    "signals": [
+                        {"dimension": "quality", "effect": -0.5, "evidence": "正文字数过少且无外链", "label": "短文本水贴"}
+                    ],
+                    "rank_score": 0.2
+                }
+
+        # ── Layer 3: High-Value Technical & Engagement Signals ──
+        pre_signals = []
+        is_substantive_tech = False
+        if any(w in combined_lower for w in ["github.com/", "docker-compose", "systemctl", "curl ", "git clone"]):
+            is_substantive_tech = True
+            pre_signals.append({"dimension": "quality", "effect": 0.25, "evidence": "包含开源代码库或部署配置", "label": "硬核配置"})
+
+        if post_count >= 15:
+            pre_signals.append({"dimension": "quality", "effect": 0.2, "evidence": f"社区热烈讨论({post_count}楼)", "label": "社区热议"})
+        elif post_count >= 8:
+            pre_signals.append({"dimension": "quality", "effect": 0.1, "evidence": f"社区讨论活跃({post_count}楼)", "label": "活跃互动"})
+
+        # ── Layer 4: LLM Semantic Evaluation ──
         model = self.summary_model
         snippet = (text or "")[:1500]
 
-        prompt = f"""你是一个信息筛选审核员。请对以下RSS文章进行价值分流与质量评估。
+        prompt = f"""你是一个专业的高效信息审核顾问。请对以下内容进行深度质量评估与价值分流。
 文章来源：{source_title}
 文章标题：{title}
+所属分组：{group_name or '综合'}
+楼层讨论数：{post_count}
 内容摘要：{snippet}
 
 请严格按 JSON 格式回复，不要包含任何额外代码块标记或解释：
@@ -88,37 +209,34 @@ class AIService:
   "expiry_score": 0.0,
   "reason": "简短判定理由，20字以内",
   "signals": [
-    {{"dimension": "quality", "effect": 0.2, "evidence": "内容充实，有代码和实操细节", "label": "深度干货"}},
-    {{"dimension": "promotion", "effect": -0.1, "evidence": "带有一处活动推荐", "label": "轻微推广"}}
+    {{"dimension": "quality", "effect": 0.2, "evidence": "详细教程且含代码", "label": "深度干货"}}
   ]
 }}
 
 判定准则：
-1. featured（精选）：高信息密度、硬核干货、独家观点或重要科技动态；
-2. general（一般）：普通资讯、常规讨论、教程、一般优惠；
-3. hidden（折叠）：纯广告软文、纯砍价返利无营养帖、已过期活动或灌水废帖；
-4. 不确定时放行（fail-open 归为 general）。"""
+1. featured（精选）：高信息密度、硬核技术/开源教程、高赞深度讨论、实用首发工具；
+2. general（一般）：常规问答讨论、普通资讯、日常分享；
+3. hidden（折叠）：纯营销砍价、纯情绪灌水、已失效活动；
+4. 不确定时一律放行（fail-open 归为 general）。"""
 
         messages = [{"role": "user", "content": prompt}]
         raw = await self._call_llm(model, messages, temperature=0.1, max_tokens=400)
         
-        # Default fallback
         fallback = {
-            "value_tier": "general",
-            "value_score": 0.6,
-            "quality_score": 0.6,
+            "value_tier": "featured" if is_substantive_tech or post_count >= 15 else "general",
+            "value_score": 0.75 if is_substantive_tech else 0.6,
+            "quality_score": 0.7 if is_substantive_tech else 0.6,
             "promotion_score": 0.0,
             "expiry_score": 0.0,
-            "reason": "规则默认分流",
-            "signals": [],
-            "rank_score": 0.6
+            "reason": "规则默认分流" if not is_substantive_tech else "硬核开源/技术教程推荐",
+            "signals": pre_signals,
+            "rank_score": 0.75 if is_substantive_tech else 0.6
         }
 
         if not raw:
             return fallback
 
         try:
-            # clean json
             clean_str = raw.strip()
             if clean_str.startswith("```"):
                 clean_str = clean_str.split("\n", 1)[1]
@@ -127,11 +245,24 @@ class AIService:
             clean_str = clean_str.strip()
             parsed = json.loads(clean_str)
             
-            # calculate rank_score
+            # Combine pre-signals and LLM signals
+            all_signals = pre_signals + parsed.get("signals", [])
+            parsed["signals"] = all_signals
+
             val = float(parsed.get("value_score", 0.6))
             promo = float(parsed.get("promotion_score", 0.0))
-            rank = round(max(0.0, min(1.0, val - promo * 0.3)), 2)
+            
+            # Boost rank score if substantive tech or high engagement
+            engagement_boost = 0.15 if post_count >= 15 else (0.08 if post_count >= 8 else 0.0)
+            tech_boost = 0.1 if is_substantive_tech else 0.0
+            
+            rank = round(max(0.0, min(1.0, val - promo * 0.3 + engagement_boost + tech_boost)), 2)
             parsed["rank_score"] = rank
+
+            # If substantive tech and high engagement, ensure featured
+            if (is_substantive_tech and rank >= 0.7) or (post_count >= 20 and parsed.get("value_tier") != "hidden"):
+                parsed["value_tier"] = "featured"
+
             return parsed
         except Exception:
             return fallback

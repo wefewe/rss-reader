@@ -201,8 +201,15 @@ async def enrich_new_articles(articles: list):
                 if pref and pref.pure_rule_mode:
                     break # Skip AI in pure rule mode
 
-                # 1. AI Triage
-                triage = await ai_service.triage_article(a.title, a.summary or "", a.source_title)
+                # 1. AI Triage with multi-layer filtering
+                triage = await ai_service.triage_article(
+                    a.title,
+                    a.summary or "",
+                    a.source_title,
+                    group_name=a.group_name,
+                    discussion_posts=a.discussion_posts or [],
+                    extra_meta={"source_id": a.source_id}
+                )
                 
                 # 2. AI Summary
                 ai_sum = await ai_service.summarize_article(a.title, a.summary or "", pref.summary_model if pref else None)

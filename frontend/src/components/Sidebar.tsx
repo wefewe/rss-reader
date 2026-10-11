@@ -12,18 +12,23 @@ import {
   Layers, 
   Flame,
   ChevronRight,
-  ChevronDown
+  ChevronDown,
+  Sun,
+  Moon,
+  Eye,
 } from 'lucide-react';
-import { FeedSource, ViewType } from '../types';
+import { FeedSource, ViewType, ThemeMode } from '../types';
 
 interface SidebarProps {
   sources: FeedSource[];
   currentGroup: string;
   currentSourceId: string;
   currentView: ViewType;
+  currentTheme: ThemeMode;
   onSelectGroup: (group: string) => void;
   onSelectSource: (sourceId: string) => void;
   onSelectView: (view: ViewType) => void;
+  onSelectTheme: (theme: ThemeMode) => void;
   onRefresh: () => void;
   onOpenBrief: () => void;
   onOpenSettings: () => void;
@@ -37,9 +42,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
   currentGroup,
   currentSourceId,
   currentView,
+  currentTheme,
   onSelectGroup,
   onSelectSource,
   onSelectView,
+  onSelectTheme,
   onRefresh,
   onOpenBrief,
   onOpenSettings,
@@ -247,21 +254,52 @@ export const Sidebar: React.FC<SidebarProps> = ({
       </div>
 
       {/* Bottom Controls */}
-      <div className="p-3 border-t border-surfaceBorder flex items-center justify-between bg-surface/50">
+      <div className="p-2.5 border-t border-surfaceBorder flex items-center justify-between bg-surface/50 gap-1.5">
         <button
           onClick={onOpenBrief}
-          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium text-textMuted hover:text-textPrimary hover:bg-surfaceRaised transition-all"
+          className="flex items-center gap-1.5 px-2 py-1 rounded-lg text-xs font-medium text-textMuted hover:text-textPrimary hover:bg-surfaceRaised transition-all"
         >
-          <Coffee size={15} className="text-accentGold" />
-          <span>每日早报</span>
+          <Coffee size={14} className="text-accentGold" />
+          <span>早报</span>
         </button>
+
+        {/* 3-Theme Selector */}
+        <div className="flex items-center p-0.5 rounded-lg bg-surfaceRaised/80 border border-surfaceBorder text-[11px]">
+          <button
+            onClick={() => onSelectTheme('dark')}
+            className={`p-1 rounded-md transition-colors ${
+              currentTheme === 'dark' ? 'bg-surface text-indigo-400 shadow-xs' : 'text-textMuted hover:text-textPrimary'
+            }`}
+            title="极夜暗黑模式"
+          >
+            <Moon size={13} />
+          </button>
+          <button
+            onClick={() => onSelectTheme('light')}
+            className={`p-1 rounded-md transition-colors ${
+              currentTheme === 'light' ? 'bg-surface text-amber-500 shadow-xs' : 'text-textMuted hover:text-textPrimary'
+            }`}
+            title="纯净明亮模式"
+          >
+            <Sun size={13} />
+          </button>
+          <button
+            onClick={() => onSelectTheme('sepia')}
+            className={`p-1 rounded-md transition-colors ${
+              currentTheme === 'sepia' ? 'bg-surface text-amber-700 dark:text-amber-300 shadow-xs' : 'text-textMuted hover:text-textPrimary'
+            }`}
+            title="暖白护眼模式"
+          >
+            <Eye size={13} />
+          </button>
+        </div>
 
         <button
           onClick={onOpenSettings}
           className="p-1.5 rounded-lg text-textMuted hover:text-textPrimary hover:bg-surfaceRaised transition-colors"
           title="系统与偏好设置"
         >
-          <Settings size={16} />
+          <Settings size={15} />
         </button>
       </div>
     </aside>

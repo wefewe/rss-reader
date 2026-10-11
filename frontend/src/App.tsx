@@ -5,7 +5,7 @@ import { ReaderView } from './components/ReaderView';
 import { MorningBriefModal } from './components/MorningBriefModal';
 import { SettingsModal } from './components/SettingsModal';
 import { LoginScreen } from './components/LoginScreen';
-import { Article, FeedSource, ReaderPreferences, ViewType } from './types';
+import { Article, FeedSource, ReaderPreferences, ViewType, ThemeMode } from './types';
 import { 
   listReader, 
   getArticle, 
@@ -22,6 +22,9 @@ import {
 export const App: React.FC = () => {
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(true);
   const [isCheckingAuth, setIsCheckingAuth] = useState<boolean>(true);
+  const [theme, setTheme] = useState<ThemeMode>(() => {
+    return (localStorage.getItem('reader_theme') as ThemeMode) || 'dark';
+  });
 
   const [articles, setArticles] = useState<Article[]>([]);
   const [sources, setSources] = useState<FeedSource[]>([]);
@@ -48,6 +51,13 @@ export const App: React.FC = () => {
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState<boolean>(false);
   const [isLoadingFullText, setIsLoadingFullText] = useState<boolean>(false);
   const [isLoadingSummary, setIsLoadingSummary] = useState<boolean>(false);
+
+  // Theme class sync
+  useEffect(() => {
+    document.documentElement.classList.remove('theme-dark', 'theme-light', 'theme-sepia');
+    document.documentElement.classList.add(`theme-${theme}`);
+    localStorage.setItem('reader_theme', theme);
+  }, [theme]);
 
   // Check Auth on Mount
   useEffect(() => {
@@ -278,9 +288,11 @@ export const App: React.FC = () => {
         currentGroup={currentGroup}
         currentSourceId={currentSourceId}
         currentView={currentView}
+        currentTheme={theme}
         onSelectGroup={(g) => { setCurrentGroup(g); setCurrentSourceId(''); }}
         onSelectSource={(s) => setCurrentSourceId(s)}
         onSelectView={(v) => setCurrentView(v)}
+        onSelectTheme={setTheme}
         onRefresh={handleRefresh}
         onOpenBrief={() => setIsBriefModalOpen(true)}
         onOpenSettings={() => setIsSettingsModalOpen(true)}

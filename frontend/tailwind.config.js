@@ -7,12 +7,12 @@ export default {
   theme: {
     extend: {
       colors: {
-        background: '#0d1117',
-        surface: '#161b22',
-        surfaceRaised: '#21262d',
-        surfaceBorder: '#30363d',
-        textPrimary: '#f0f6fc',
-        textMuted: '#8b949e',
+        background: 'var(--color-bg)',
+        surface: 'var(--color-surface)',
+        surfaceRaised: 'var(--color-surface-raised)',
+        surfaceBorder: 'var(--color-surface-border)',
+        textPrimary: 'var(--color-text-primary)',
+        textMuted: 'var(--color-text-muted)',
         accent: '#2f81f7',
         accentGreen: '#238636',
         accentGold: '#d29922',

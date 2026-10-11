@@ -78,3 +78,4 @@ export interface DigestRecord {
 }
 
 export type ViewType = 'all' | 'unread' | 'starred' | 'featured';
+export type ThemeMode = 'dark' | 'light' | 'sepia';
