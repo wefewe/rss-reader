@@ -239,6 +239,8 @@ async def ingest_external_feed(data: IngestExternalFeedInput, db: AsyncSession =
 
     source.last_checked_at = datetime.datetime.utcnow()
     source.last_success_at = datetime.datetime.utcnow()
+    source.status = "active"
+    source.last_error = None
     await db.commit()
     await update_source_counters(db, source_id)
     await db.commit()
