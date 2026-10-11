@@ -1,9 +1,12 @@
 import logging
 import datetime
+import re
+import xml.etree.ElementTree as ET
 from typing import Optional, List, Dict, Any
-from fastapi import APIRouter, Depends, HTTPException, Query, Body, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Body, Request, UploadFile, File
+from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update, delete, desc, func, or_
+from sqlalchemy import select, update, delete, desc, func, or_, cast, String
 from .database import get_db
 from .models import FeedSource, Article, ReaderPreference, DigestRecord, ArticleImage
 from .schemas import (
@@ -23,6 +26,8 @@ from .schemas import (
     LoginInput,
     AskArticleInput,
     AskArticleResponse,
+    ForwardTelegramInput,
+    ImportOpmlResponse,
 )
 from .feed_crawler import refresh_all_feeds, parse_date, clean_html, enrich_new_articles, run_daily_brief_job
 from .content_extractor import extract_fulltext_from_url
@@ -116,7 +121,14 @@ async def list_reader(
 
     if search:
         kw = f"%{search.strip()}%"
-        stmt = stmt.where(or_(Article.title.ilike(kw), Article.summary.ilike(kw)))
+        stmt = stmt.where(
+            or_(
+                Article.title.ilike(kw),
+                Article.summary.ilike(kw),
+                Article.content.ilike(kw),
+                cast(Article.discussion_posts, String).ilike(kw)
+            )
+        )
 
     # Order by rank_score DESC, published_at DESC
     stmt = stmt.order_by(desc(Article.rank_score), desc(Article.published_at)).limit(limit)
@@ -505,6 +517,148 @@ async def ask_article_endpoint(body: AskArticleInput, db: AsyncSession = Depends
         model=model
     )
     return {"status": "ok", "answer": answer}
+
+# 15. Forward to Telegram
+@router.post("/article/forward_telegram")
+async def forward_telegram_endpoint(body: ForwardTelegramInput, db: AsyncSession = Depends(get_db)):
+    art_id = body.id
+    article = await db.get(Article, art_id)
+    if not article:
+        stmt = select(Article).where(Article.url == art_id).limit(1)
+        res = await db.execute(stmt)
+        article = res.scalars().first()
+
+    if not article:
+        raise HTTPException(status_code=404, detail="文章未找到")
+
+    if not settings.TG_BOT_TOKEN or not settings.TG_CHAT_ID:
+        raise HTTPException(status_code=500, detail="服务器未配置 Telegram 推送凭据")
+
+    lines = [
+        f"📖 *{article.title}*",
+        f"🏷️ 来源：`{article.source_title}` | 分组：`{article.group_name}`",
+        f"🔗 [查看原文]({article.url})",
+        "",
+        "💡 *AI 中文深度摘要*："
+    ]
+    if article.summary:
+        lines.append(article.summary[:2500])
+    else:
+        lines.append("（暂无AI摘要）")
+
+    if article.discussion_posts:
+        lines.append(f"\n💬 *包含 {len(article.discussion_posts)} 条精选回帖讨论*")
+
+    tg_text = "\n".join(lines)
+    await ai_service.push_telegram_notification(tg_text)
+    return {"status": "ok", "message": "已成功推送到 Telegram 个人收藏夹"}
+
+# 16. Export OPML
+@router.get("/opml/export")
+async def export_opml(db: AsyncSession = Depends(get_db)):
+    res = await db.execute(select(FeedSource))
+    sources = res.scalars().all()
+
+    opml = ET.Element("opml", version="2.0")
+    head = ET.SubElement(opml, "head")
+    title = ET.SubElement(head, "title")
+    title.text = "AI RSS Reader Subscriptions"
+    date_created = ET.SubElement(head, "dateCreated")
+    date_created.text = datetime.datetime.utcnow().strftime("%a, %d %b %Y %H:%M:%S GMT")
+
+    body = ET.SubElement(opml, "body")
+
+    # Group sources by group_name
+    grouped: Dict[str, List[FeedSource]] = {}
+    for s in sources:
+        grp = s.group_name or "未分组"
+        grouped.setdefault(grp, []).append(s)
+
+    for grp, srcs in sorted(grouped.items()):
+        grp_outline = ET.SubElement(body, "outline", text=grp, title=grp)
+        for s in srcs:
+            attrs = {
+                "type": "rss",
+                "text": s.title,
+                "title": s.title,
+                "xmlUrl": s.feed_url,
+                "htmlUrl": s.site_url or "",
+            }
+            if s.description:
+                attrs["description"] = s.description
+            ET.SubElement(grp_outline, "outline", **attrs)
+
+    xml_bytes = ET.tostring(opml, encoding="utf-8", xml_declaration=True)
+    return Response(
+        content=xml_bytes,
+        media_type="text/xml; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="subscriptions.opml"'}
+    )
+
+# 17. Import OPML
+@router.post("/opml/import", response_model=ImportOpmlResponse)
+async def import_opml(file: UploadFile = File(...), db: AsyncSession = Depends(get_db)):
+    content = await file.read()
+    try:
+        root = ET.fromstring(content)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"无法解析 OPML XML 文件: {str(e)}")
+
+    res = await db.execute(select(FeedSource.feed_url))
+    existing_urls = set(res.scalars().all())
+
+    body = root.find("body")
+    if body is None:
+        body = root
+
+    imported = []
+    skipped = 0
+
+    def parse_outlines(parent_node, current_group="个人导入"):
+        nonlocal skipped
+        for outline in parent_node.findall("outline"):
+            xml_url = outline.get("xmlUrl") or outline.get("xmlurl")
+            if xml_url:
+                title = outline.get("title") or outline.get("text") or "未命名订阅源"
+                site_url = outline.get("htmlUrl") or outline.get("htmlurl") or ""
+                desc = outline.get("description") or ""
+                grp = current_group if current_group != "未分组" else (outline.get("group") or "个人导入")
+
+                if xml_url in existing_urls:
+                    skipped += 1
+                    continue
+
+                slug = re.sub(r'[^a-zA-Z0-9_\-]', '', title.lower()[:30]) or "feed"
+                source_id = f"custom-{slug}-{len(existing_urls)+1}"
+
+                src = FeedSource(
+                    id=source_id,
+                    title=title,
+                    site_url=site_url,
+                    feed_url=xml_url,
+                    description=desc,
+                    group_name=grp,
+                    status="active"
+                )
+                db.add(src)
+                existing_urls.add(xml_url)
+                imported.append(title)
+            else:
+                grp_title = outline.get("title") or outline.get("text") or current_group
+                parse_outlines(outline, grp_title)
+
+    parse_outlines(body)
+    await db.commit()
+
+    if imported:
+        asyncio.create_task(refresh_all_feeds())
+
+    return {
+        "status": "ok",
+        "imported_count": len(imported),
+        "skipped_count": skipped,
+        "new_sources": imported
+    }
 
 @router.get("/health")
 async def health_check():

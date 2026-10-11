@@ -141,6 +141,15 @@ class AskArticleResponse(BaseModel):
     status: str = "ok"
     answer: str
 
+class ForwardTelegramInput(BaseModel):
+    id: str
+
+class ImportOpmlResponse(BaseModel):
+    status: str = "ok"
+    imported_count: int
+    skipped_count: int
+    new_sources: List[str]
+
 class DigestRecordSchema(BaseModel):
     id: int
     date: str

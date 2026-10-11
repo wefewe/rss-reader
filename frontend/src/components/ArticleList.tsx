@@ -70,7 +70,7 @@ export const ArticleList: React.FC<ArticleListProps> = ({
             <input
               id="article-search-input"
               type="text"
-              placeholder="搜索标题或按 / 聚焦..."
+              placeholder="全文、评论或标题搜索 (按 / 聚焦)..."
               value={searchQuery}
               onChange={(e) => onSearchChange(e.target.value)}
               className="w-full bg-surface border border-surfaceBorder rounded-lg pl-8 pr-3 py-1.5 text-xs text-textPrimary placeholder:text-textMuted/60 focus:outline-none focus:border-accent"

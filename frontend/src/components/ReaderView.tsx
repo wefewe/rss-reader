@@ -19,12 +19,14 @@ import {
   Copy,
   Check,
   X,
-  BookOpen
+  BookOpen,
+  Send
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { Article } from '../types';
 import { DiscussionPosts } from './DiscussionPosts';
 import { ArticleAiAssistant } from './ArticleAiAssistant';
+import { forwardTelegram } from '../api';
 
 interface ReaderViewProps {
   article: Article | null;
@@ -58,6 +60,8 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
   const [activeLightboxImg, setActiveLightboxImg] = useState<string | null>(null);
   const [isCopied, setIsCopied] = useState<boolean>(false);
   const [isTypographyOpen, setIsTypographyOpen] = useState<boolean>(false);
+  const [isSendingTg, setIsSendingTg] = useState<boolean>(false);
+  const [tgSentSuccess, setTgSentSuccess] = useState<boolean>(false);
 
   // Typography settings with localStorage persistence
   const [fontSize, setFontSize] = useState<number>(() => {
@@ -116,6 +120,20 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
       setIsCopied(true);
       setTimeout(() => setIsCopied(false), 2000);
     });
+  };
+
+  const handleForwardTg = async () => {
+    if (!article || isSendingTg) return;
+    setIsSendingTg(true);
+    try {
+      await forwardTelegram(article.id);
+      setTgSentSuccess(true);
+      setTimeout(() => setTgSentSuccess(false), 2500);
+    } catch (err: any) {
+      alert(err.message || '转发至 Telegram 失败');
+    } finally {
+      setIsSendingTg(false);
+    }
   };
 
   if (!article) {
@@ -279,6 +297,26 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
             title={isCopied ? "已复制到剪贴板！" : "复制 Markdown 笔记"}
           >
             {isCopied ? <Check size={15} className="text-accentGreen" /> : <Copy size={15} />}
+          </button>
+
+          {/* Forward to Telegram Favorites */}
+          <button
+            onClick={handleForwardTg}
+            disabled={isSendingTg}
+            className={`p-1.5 rounded-lg transition-colors flex items-center gap-1 ${
+              tgSentSuccess 
+                ? 'bg-accentGreen/15 text-accentGreen' 
+                : 'text-textMuted hover:text-accent hover:bg-surfaceRaised'
+            }`}
+            title={tgSentSuccess ? "已推送至 Telegram 收藏夹！" : "一键推送至 Telegram 收藏夹"}
+          >
+            {isSendingTg ? (
+              <RefreshCw size={15} className="animate-spin text-accent" />
+            ) : tgSentSuccess ? (
+              <Check size={15} className="text-accentGreen" />
+            ) : (
+              <Send size={15} />
+            )}
           </button>
 
           {/* Zen Focus Mode Toggle */}

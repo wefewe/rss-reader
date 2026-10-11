@@ -194,3 +194,56 @@ export async function askArticle(
   return data.answer || '未能获取回答，请稍后重试。';
 }
 
+export async function forwardTelegram(id: string): Promise<string> {
+  const res = await request(`${API_BASE}/article/forward_telegram`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id }),
+  });
+  const data = await res.json();
+  return data.message || '已成功转发至 Telegram 收藏夹';
+}
+
+export async function downloadOpmlExport(): Promise<void> {
+  const token = localStorage.getItem('reader_token');
+  const headers: Record<string, string> = {};
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+
+  const res = await fetch(`${API_BASE}/opml/export`, { headers });
+  if (!res.ok) throw new Error('导出 OPML 失败');
+  const blob = await res.blob();
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `subscriptions_${new Date().toISOString().slice(0, 10)}.opml`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  window.URL.revokeObjectURL(url);
+}
+
+export async function importOpmlFile(file: File): Promise<{
+  imported_count: number;
+  skipped_count: number;
+  new_sources: string[];
+}> {
+  const token = localStorage.getItem('reader_token');
+  const headers: Record<string, string> = {};
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+
+  const formData = new FormData();
+  formData.append('file', file);
+
+  const res = await fetch(`${API_BASE}/opml/import`, {
+    method: 'POST',
+    headers,
+    body: formData,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || '导入 OPML 失败');
+  }
+  return await res.json();
+}
+
+

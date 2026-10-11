@@ -1,7 +1,20 @@
-import React, { useState } from 'react';
-import { X, Settings, Check, ShieldCheck, Sparkles, Sliders, LogOut, VolumeX, Plus } from 'lucide-react';
+import React, { useState, useRef } from 'react';
+import { 
+  X, 
+  Settings, 
+  Check, 
+  ShieldCheck, 
+  Sparkles, 
+  Sliders, 
+  LogOut, 
+  VolumeX, 
+  Plus, 
+  Download, 
+  Upload, 
+  Loader2 
+} from 'lucide-react';
 import { ReaderPreferences } from '../types';
-import { updateReaderPreferences, logout } from '../api';
+import { updateReaderPreferences, logout, downloadOpmlExport, importOpmlFile } from '../api';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -19,12 +32,52 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [form, setForm] = useState<ReaderPreferences>(preferences);
   const [newKeyword, setNewKeyword] = useState<string>('');
   const [isSaving, setIsSaving] = useState(false);
+  const [isExportingOpml, setIsExportingOpml] = useState(false);
+  const [isImportingOpml, setIsImportingOpml] = useState(false);
+  const [importResult, setImportResult] = useState<{ message: string; success: boolean } | null>(null);
+  const opmlFileInputRef = useRef<HTMLInputElement>(null);
 
   React.useEffect(() => {
     setForm(preferences);
   }, [preferences]);
 
   if (!isOpen) return null;
+
+  const handleExportOpml = async () => {
+    setIsExportingOpml(true);
+    try {
+      await downloadOpmlExport();
+    } catch (err: any) {
+      alert(err.message || '导出 OPML 失败');
+    } finally {
+      setIsExportingOpml(false);
+    }
+  };
+
+  const handleImportFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setIsImportingOpml(true);
+    setImportResult(null);
+    try {
+      const res = await importOpmlFile(file);
+      setImportResult({
+        success: true,
+        message: `成功导入 ${res.imported_count} 个新订阅源（跳过已存在 ${res.skipped_count} 个），正在后台首轮抓取！`
+      });
+      setTimeout(() => {
+        window.location.reload();
+      }, 1500);
+    } catch (err: any) {
+      setImportResult({
+        success: false,
+        message: `导入失败: ${err.message || '文件格式不正确'}`
+      });
+    } finally {
+      setIsImportingOpml(false);
+      if (opmlFileInputRef.current) opmlFileInputRef.current.value = '';
+    }
+  };
 
   const handleAddKeyword = () => {
     const kw = newKeyword.trim();
@@ -248,6 +301,60 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   className="w-full bg-surface border border-surfaceBorder rounded-lg px-3 py-1.5 text-xs text-textPrimary font-mono focus:outline-none focus:border-accent"
                 />
               </div>
+            </div>
+          </div>
+
+          {/* OPML Management Section */}
+          <div className="space-y-3">
+            <h3 className="font-semibold text-textMuted uppercase tracking-wider text-[11px] flex items-center gap-1.5">
+              <Download size={13} className="text-accent" />
+              订阅源管理与 OPML 备份 / 迁移
+            </h3>
+            <div className="space-y-3 bg-surfaceRaised/50 p-3.5 rounded-xl border border-surfaceBorder">
+              <p className="text-[11px] text-textMuted">
+                导出通用标准 OPML 订阅树，或从 Inoreader、Feedly、NetNewsWire 导入其他 RSS 订阅源。
+              </p>
+
+              <div className="flex items-center gap-2">
+                {/* Export Button */}
+                <button
+                  type="button"
+                  onClick={handleExportOpml}
+                  disabled={isExportingOpml}
+                  className="flex-1 py-2 px-3 rounded-xl bg-surface border border-surfaceBorder hover:border-accent hover:text-accent text-xs font-medium text-textPrimary transition-colors flex items-center justify-center gap-1.5 shadow-2xs"
+                >
+                  {isExportingOpml ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />}
+                  <span>导出 OPML 备份</span>
+                </button>
+
+                {/* Import Button */}
+                <input
+                  type="file"
+                  ref={opmlFileInputRef}
+                  onChange={handleImportFileChange}
+                  accept=".opml,.xml"
+                  className="hidden"
+                />
+                <button
+                  type="button"
+                  onClick={() => opmlFileInputRef.current?.click()}
+                  disabled={isImportingOpml}
+                  className="flex-1 py-2 px-3 rounded-xl bg-surface border border-surfaceBorder hover:border-accent hover:text-accent text-xs font-medium text-textPrimary transition-colors flex items-center justify-center gap-1.5 shadow-2xs"
+                >
+                  {isImportingOpml ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
+                  <span>导入 OPML 文件</span>
+                </button>
+              </div>
+
+              {importResult && (
+                <div className={`p-2.5 rounded-lg text-xs leading-relaxed border ${
+                  importResult.success 
+                    ? 'bg-accentGreen/10 border-accentGreen/30 text-accentGreen' 
+                    : 'bg-accentRed/10 border-accentRed/30 text-accentRed'
+                }`}>
+                  {importResult.message}
+                </div>
+              )}
             </div>
           </div>
         </div>
