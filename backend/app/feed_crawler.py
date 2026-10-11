@@ -69,6 +69,11 @@ async def fetch_single_feed(source: FeedSource):
     Fetches and parses a single RSS feed.
     Enforces 50-article retention with protection for the current batch.
     """
+    # Exemption Rule 8.4: LINUX DO sources are managed exclusively by external browser worker
+    if "linux.do" in source.feed_url:
+        logger.info(f"Skipping direct HTTP fetch for {source.title} (managed exclusively by external Playwright worker)")
+        return
+
     logger.info(f"Checking feed: {source.title} ({source.feed_url})")
     source_id = source.id
     source_title = source.title
