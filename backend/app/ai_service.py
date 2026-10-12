@@ -202,15 +202,27 @@ class AIService:
         except Exception as e:
             logger.warning(f"Edge-TTS stream unavailable ({e}), trying Google TTS stream")
 
-        # 2. Robust Google TTS fallback
+        # 2. Robust Google TTS fallback (chunked MP3 stream)
         try:
             import urllib.parse
-            encoded = urllib.parse.quote(clean_text[:400])
-            url = f"https://translate.google.com/translate_tts?ie=UTF-8&q={encoded}&tl=zh-CN&client=tw-ob"
+            # Split into ~140 character chunks at punctuation boundaries
+            chunks = re.findall(r'.{1,140}(?:[，。！？\s\n]|$)', clean_text, re.DOTALL)
+            if not chunks:
+                chunks = [clean_text[:140]]
+
+            audio_parts = []
             async with httpx.AsyncClient(headers={"User-Agent": "Mozilla/5.0"}, timeout=15.0) as client:
-                resp = await client.get(url)
-                if resp.status_code == 200:
-                    return resp.content
+                for c in chunks[:12]:
+                    c_clean = c.strip()
+                    if not c_clean:
+                        continue
+                    encoded = urllib.parse.quote(c_clean)
+                    url = f"https://translate.google.com/translate_tts?ie=UTF-8&q={encoded}&tl=zh-CN&client=tw-ob"
+                    resp = await client.get(url)
+                    if resp.status_code == 200:
+                        audio_parts.append(resp.content)
+            if audio_parts:
+                return b"".join(audio_parts)
         except Exception as e:
             logger.error(f"Google TTS fallback error: {e}")
 
