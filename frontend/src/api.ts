@@ -77,6 +77,7 @@ export async function listReader(params: {
   sources: FeedSource[];
   preferences: ReaderPreferences;
   last_checked_at: string;
+  tier_counts?: { normal: number; featured: number; hidden: number };
 }> {
   const query = new URLSearchParams();
   if (params.group_name && params.group_name !== '全部') query.set('group_name', params.group_name);

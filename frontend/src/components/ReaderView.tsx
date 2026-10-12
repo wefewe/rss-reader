@@ -26,6 +26,7 @@ import ReactMarkdown from 'react-markdown';
 import { Article } from '../types';
 import { DiscussionPosts } from './DiscussionPosts';
 import { ArticleAiAssistant } from './ArticleAiAssistant';
+import { TriageRadarBox } from './TriageRadarBox';
 import { forwardTelegram } from '../api';
 
 interface ReaderViewProps {
@@ -431,24 +432,8 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
               )}
             </div>
 
-            {/* Triage Signals Insight Tag cloud if available */}
-            {article.triage_signals && article.triage_signals.length > 0 && (
-              <div className="pt-2 border-t border-surfaceBorder/60 flex items-center gap-2 flex-wrap">
-                <span className="text-[10px] text-textMuted flex items-center gap-1">
-                  <Info size={11} />
-                  质量信号:
-                </span>
-                {article.triage_signals.map((sig, idx) => (
-                  <span
-                    key={idx}
-                    className="text-[10px] px-2 py-0.5 rounded-full bg-surfaceBorder text-textPrimary"
-                    title={sig.evidence}
-                  >
-                    {sig.label} ({sig.effect > 0 ? `+${sig.effect}` : sig.effect})
-                  </span>
-                ))}
-              </div>
-            )}
+            {/* AI Triage Radar Box */}
+            <TriageRadarBox article={article} />
           </div>
 
           {/* AI Conversational Assistant & Action Item Extraction */}

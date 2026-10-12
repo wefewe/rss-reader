@@ -38,11 +38,16 @@ export const ArticleCard: React.FC<ArticleCardProps> = ({
     return article.summary.replace(/[*_#]/g, '').slice(0, 85).trim() + '...';
   }, [article.summary]);
 
+  const topSignal = React.useMemo(() => {
+    if (!article.triage_signals || article.triage_signals.length === 0) return null;
+    return article.triage_signals[0];
+  }, [article.triage_signals]);
+
   return (
     <div
       id={`article-card-${article.id}`}
       onClick={onSelect}
-      className={`p-3.5 border-b border-surfaceBorder cursor-pointer transition-all relative select-none ${
+      className={`group p-3.5 border-b border-surfaceBorder cursor-pointer transition-all relative select-none ${
         isSelected
           ? 'bg-surfaceRaised border-l-2 border-l-accent'
           : article.is_read
@@ -51,17 +56,32 @@ export const ArticleCard: React.FC<ArticleCardProps> = ({
       }`}
     >
       <div className="flex items-start justify-between gap-2 mb-1.5">
-        <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex items-center gap-1.5 flex-wrap">
           {/* Unread indicator */}
           {!article.is_read && (
-            <span className="w-2 h-2 rounded-full bg-accent shrink-0 animate-pulse" />
+            <span className="w-2 h-2 rounded-full bg-accent shrink-0 animate-pulse mr-0.5" />
           )}
 
           {/* Value Tier Badge */}
-          {article.value_tier === 'featured' && (
-            <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.2 rounded font-medium bg-featuredBadge/20 text-featuredBadge border border-featuredBadge/30">
+          {article.value_tier === 'featured' ? (
+            <span className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.2 rounded font-medium bg-featuredBadge/20 text-featuredBadge border border-featuredBadge/30">
               <Flame size={10} />
               精选 {Math.round(article.rank_score * 100)}
+            </span>
+          ) : article.value_tier === 'hidden' ? (
+            <span className="text-[10px] px-1.5 py-0.2 rounded font-mono bg-surfaceRaised text-textMuted/60 border border-surfaceBorder">
+              已折叠
+            </span>
+          ) : null}
+
+          {/* Top Triage Signal Tag */}
+          {topSignal && article.value_tier !== 'hidden' && (
+            <span className={`text-[9px] px-1.5 py-0.2 rounded font-medium truncate max-w-[90px] ${
+              topSignal.effect > 0
+                ? 'bg-accentGreen/10 text-accentGreen border border-accentGreen/20'
+                : 'bg-surfaceRaised text-textMuted border border-surfaceBorder'
+            }`} title={topSignal.evidence}>
+              {topSignal.label}
             </span>
           )}
 

@@ -16,6 +16,7 @@ interface ArticleListProps {
   currentView: ViewType;
   filterTier: string;
   onFilterTierChange: (tier: string) => void;
+  tierCounts?: { normal: number; featured: number; hidden: number };
   onBackToSidebar?: () => void;
 }
 
@@ -31,6 +32,7 @@ export const ArticleList: React.FC<ArticleListProps> = ({
   onSearchChange,
   filterTier,
   onFilterTierChange,
+  tierCounts,
   onBackToSidebar,
 }) => {
   // Filter by value tier (featured / all / hidden)
@@ -97,7 +99,7 @@ export const ArticleList: React.FC<ArticleListProps> = ({
                 filterTier === 'normal' ? 'bg-surfaceRaised text-textPrimary' : 'text-textMuted hover:text-textPrimary'
               }`}
             >
-              推荐
+              推荐 {tierCounts ? `(${tierCounts.normal})` : ''}
             </button>
             <button
               onClick={() => onFilterTierChange('featured')}
@@ -105,7 +107,7 @@ export const ArticleList: React.FC<ArticleListProps> = ({
                 filterTier === 'featured' ? 'bg-featuredBadge/20 text-featuredBadge' : 'text-textMuted hover:text-textPrimary'
               }`}
             >
-              精选
+              精选 {tierCounts ? `(${tierCounts.featured})` : ''}
             </button>
             <button
               onClick={() => onFilterTierChange('hidden')}
@@ -113,7 +115,7 @@ export const ArticleList: React.FC<ArticleListProps> = ({
                 filterTier === 'hidden' ? 'bg-surfaceRaised text-textMuted' : 'text-textMuted/60 hover:text-textMuted'
               }`}
             >
-              低价值折叠
+              折叠 {tierCounts ? `(${tierCounts.hidden})` : ''}
             </button>
           </div>
 

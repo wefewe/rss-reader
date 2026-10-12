@@ -91,6 +91,7 @@ class ListReaderResponse(BaseModel):
     sources: List[FeedSourceSchema]
     preferences: ReaderPreferencesSchema
     last_checked_at: Optional[str] = None
+    tier_counts: Optional[Dict[str, int]] = None
 
 class GetArticleInput(BaseModel):
     id: str

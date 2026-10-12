@@ -53,6 +53,11 @@ export const App: React.FC = () => {
   const [currentView, setCurrentView] = useState<ViewType>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [filterTier, setFilterTier] = useState<string>('normal'); // 'normal' | 'featured' | 'hidden'
+  const [tierCounts, setTierCounts] = useState<{ normal: number; featured: number; hidden: number }>({
+    normal: 0,
+    featured: 0,
+    hidden: 0,
+  });
   const [selectedArticleId, setSelectedArticleId] = useState<string | null>(null);
 
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
@@ -104,6 +109,15 @@ export const App: React.FC = () => {
       setArticles(data.articles);
       setSources(data.sources);
       if (data.preferences) setPreferences(data.preferences);
+      if (data.tier_counts) {
+        setTierCounts(data.tier_counts);
+      } else {
+        setTierCounts({
+          normal: data.articles.filter((a: Article) => a.value_tier !== 'hidden').length,
+          featured: data.articles.filter((a: Article) => a.value_tier === 'featured').length,
+          hidden: data.articles.filter((a: Article) => a.value_tier === 'hidden').length,
+        });
+      }
 
       // Select first article if none selected on desktop
       if (data.articles.length > 0 && !selectedArticleId && window.innerWidth >= 768) {
@@ -371,6 +385,7 @@ export const App: React.FC = () => {
           currentView={currentView}
           filterTier={filterTier}
           onFilterTierChange={setFilterTier}
+          tierCounts={tierCounts}
           onBackToSidebar={() => setMobileView('sidebar')}
         />
       </div>

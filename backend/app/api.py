@@ -157,13 +157,18 @@ async def list_reader(
     # Muted keywords (静音规则过滤)
     muted_kws = [k.lower().strip() for k in (pref.muted_keywords or []) if k and k.strip()]
 
+    now_dt = datetime.datetime.utcnow()
     article_schemas = []
+
     for a in articles:
         schema = ArticleSchema.model_validate(a)
+        signals = list(schema.triage_signals or [])
 
+        haystack = f"{a.title} {a.summary or ''}".lower()
+
+        # 1. Check Mute Keywords
         matched_mute = None
         if muted_kws:
-            haystack = f"{a.title} {a.summary or ''}".lower()
             for kw in muted_kws:
                 if kw in haystack:
                     matched_mute = kw
@@ -172,23 +177,64 @@ async def list_reader(
         if matched_mute:
             schema.value_tier = "hidden"
             schema.rank_score = max(0.0, round(schema.rank_score - 0.5, 2))
-            signals = list(schema.triage_signals or [])
             signals.append({
                 "dimension": "quality",
                 "effect": -0.5,
                 "evidence": f"触发静音关键词: {matched_mute}",
                 "label": "关键词静音"
             })
-            schema.triage_signals = signals
         else:
+            # 2. Check Promotion Preferences Switches
+            is_promo_hidden = False
+            if not pref.show_affiliate and (schema.promotion_score >= 0.6 or any(w in haystack for w in ["返利", "佣金", "推广码", "aff"])):
+                schema.value_tier = "hidden"
+                signals.append({"dimension": "promotion", "effect": -0.4, "evidence": "偏好设置已过滤返利推广", "label": "返利过滤"})
+                is_promo_hidden = True
+            elif not pref.show_sponsored and (schema.content_type == "sponsored" or any(w in haystack for w in ["软文", "商业推广", "厂商赞助", "特约赞助"])):
+                schema.value_tier = "hidden"
+                signals.append({"dimension": "promotion", "effect": -0.4, "evidence": "偏好设置已过滤品牌软文", "label": "软文过滤"})
+                is_promo_hidden = True
+            elif not pref.show_big_sales and any(w in haystack for w in ["618", "双十一", "双11", "黑五", "大促"]):
+                schema.value_tier = "hidden"
+                signals.append({"dimension": "promotion", "effect": -0.3, "evidence": "偏好设置已过滤电商大促", "label": "大促过滤"})
+                is_promo_hidden = True
+            elif not pref.show_deal_alerts and (schema.group_name == "羊毛福利" or any(w in haystack for w in ["线报", "立减", "限免", "领券"])):
+                schema.value_tier = "hidden"
+                signals.append({"dimension": "promotion", "effect": -0.3, "evidence": "偏好设置已过滤实时线报", "label": "线报过滤"})
+                is_promo_hidden = True
+
+            # 3. Dynamic Feedback Bias
             bias = source_bias.get(a.source_id, 0.0) + group_bias.get(a.group_name, 0.0)
             if bias != 0:
                 schema.rank_score = max(0.0, min(1.0, round(schema.rank_score + bias, 2)))
 
+            # 4. Temporal Decay & Star/Read Adjustment
+            pub_dt = a.published_at.replace(tzinfo=None) if hasattr(a.published_at, 'tzinfo') and a.published_at.tzinfo else a.published_at
+            age_hours = max(0.0, (now_dt - pub_dt).total_seconds() / 3600.0)
+            decay = 1.0 / (1.0 + (age_hours / 96.0)) # 96-hour half-life
+
+            # High-tier articles stay high, while stale items decay gracefully
+            current_rank = schema.rank_score * (0.68 + 0.32 * decay)
+
+            if a.is_starred:
+                current_rank = min(1.0, current_rank + 0.2)
+            if a.is_read:
+                current_rank = max(0.0, current_rank - 0.1)
+
+            schema.rank_score = round(current_rank, 2)
+
+        schema.triage_signals = signals
         article_schemas.append(schema)
 
-    # Re-sort after applying feedback bias & mute penalty
+    # Re-sort by effective rank_score DESC, published_at DESC
     article_schemas.sort(key=lambda x: (x.rank_score, x.published_at), reverse=True)
+
+    # Calculate real-time counts across value tiers
+    tier_counts = {
+        "normal": sum(1 for a in article_schemas if a.value_tier != "hidden"),
+        "featured": sum(1 for a in article_schemas if a.value_tier == "featured"),
+        "hidden": sum(1 for a in article_schemas if a.value_tier == "hidden"),
+    }
 
     # Query sources
     src_res = await db.execute(select(FeedSource))
@@ -204,6 +250,7 @@ async def list_reader(
         "sources": [FeedSourceSchema.model_validate(s) for s in sources],
         "preferences": ReaderPreferencesSchema.model_validate(pref),
         "last_checked_at": last_checked,
+        "tier_counts": tier_counts,
     }
 
 # 2. getarticle (handles both composite key and bare url per Rule 13.4)
