@@ -90,15 +90,74 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
   const [isLoadingBilingual, setIsLoadingBilingual] = useState<boolean>(false);
   const [bilingualContent, setBilingualContent] = useState<string | null>(null);
 
-  // Audio Player State (Edge-TTS 伴读播客)
+  // Audio Player State (Web Speech API + Edge-TTS 伴读播客)
   const [isPlayingAudio, setIsPlayingAudio] = useState<boolean>(false);
   const [isAudioPlayerOpen, setIsAudioPlayerOpen] = useState<boolean>(false);
+  const [speechRate, setSpeechRate] = useState<number>(1.0);
   const audioRef = useRef<HTMLAudioElement>(null);
 
-  useEffect(() => {
+  const stopAudio = () => {
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+    }
+    if (audioRef.current) {
+      audioRef.current.pause();
+    }
     setIsPlayingAudio(false);
     setIsAudioPlayerOpen(false);
+  };
+
+  useEffect(() => {
+    stopAudio();
   }, [article?.id]);
+
+  const startAudioPlayback = (rate = speechRate) => {
+    if (!article) return;
+    setIsAudioPlayerOpen(true);
+
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+      const rawText = `${article.clean_title || article.title}。来源：${article.source_title}。${article.summary ? 'AI速览：' + article.summary.replace(/[*_#`>\[\]\(\)]/g, '') : ''}`;
+      const utterance = new SpeechSynthesisUtterance(rawText);
+      utterance.lang = /[\u4e00-\u9fa5]/.test(rawText) ? 'zh-CN' : 'en-US';
+      utterance.rate = rate;
+      utterance.onend = () => setIsPlayingAudio(false);
+      utterance.onerror = () => setIsPlayingAudio(false);
+      window.speechSynthesis.speak(utterance);
+      setIsPlayingAudio(true);
+    } else if (audioRef.current) {
+      audioRef.current.play().catch(() => {});
+      setIsPlayingAudio(true);
+    }
+  };
+
+  const toggleAudioPlayback = () => {
+    if (!isAudioPlayerOpen) {
+      startAudioPlayback();
+      return;
+    }
+    if ('speechSynthesis' in window) {
+      if (isPlayingAudio) {
+        window.speechSynthesis.pause();
+        setIsPlayingAudio(false);
+      } else {
+        if (window.speechSynthesis.paused) {
+          window.speechSynthesis.resume();
+          setIsPlayingAudio(true);
+        } else {
+          startAudioPlayback();
+        }
+      }
+    } else if (audioRef.current) {
+      if (isPlayingAudio) {
+        audioRef.current.pause();
+        setIsPlayingAudio(false);
+      } else {
+        audioRef.current.play().catch(() => {});
+        setIsPlayingAudio(true);
+      }
+    }
+  };
 
   useEffect(() => {
     setIsBilingualMode(false);
@@ -416,21 +475,18 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
 
           {/* Edge-TTS Audio Player Toggle */}
           <button
-            onClick={() => {
-              setIsAudioPlayerOpen(!isAudioPlayerOpen);
-              if (!isAudioPlayerOpen) {
-                setIsPlayingAudio(true);
-              }
-            }}
+            onClick={toggleAudioPlayback}
             className={`p-1.5 rounded-lg text-xs flex items-center gap-1 transition-colors ${
               isAudioPlayerOpen
                 ? 'bg-featuredBadge/20 text-featuredBadge font-semibold border border-featuredBadge/30'
                 : 'text-textMuted hover:text-textPrimary hover:bg-surfaceRaised'
             }`}
-            title="Edge-TTS 自然语音听文 / 播客伴读"
+            title="Edge-TTS / 浏览器自然语音听文伴读"
           >
             <Headphones size={15} />
-            <span className="hidden sm:inline text-[11px]">听文</span>
+            <span className="hidden sm:inline text-[11px]">
+              {isPlayingAudio ? "朗读中" : "听文"}
+            </span>
           </button>
 
           {/* Zen Focus Mode Toggle */}
@@ -690,47 +746,52 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
         </div>
       )}
 
-      {/* 5. Edge-TTS Floating Audio Player Bar */}
+      {/* 5. Natural Voice / Audio Player Bar */}
       {isAudioPlayerOpen && article && (
         <div className="absolute bottom-5 left-1/2 -translate-x-1/2 z-50 bg-surface/95 backdrop-blur-md border border-surfaceBorder rounded-2xl shadow-2xl p-2.5 px-4 flex items-center gap-3.5 text-xs text-textPrimary animate-in slide-in-from-bottom-2 duration-150 select-none">
           <audio
             ref={audioRef}
             src={`/api/reader/article/tts_audio?id=${encodeURIComponent(article.id)}&token=${getAuthToken() || ''}`}
-            onPlay={() => setIsPlayingAudio(true)}
-            onPause={() => setIsPlayingAudio(false)}
             onEnded={() => setIsPlayingAudio(false)}
-            autoPlay
           />
           <div className="flex items-center gap-2 min-w-0">
-            <Volume2 size={16} className="text-accent animate-pulse shrink-0" />
-            <span className="font-medium text-xs truncate max-w-[180px] sm:max-w-xs">
+            <Volume2 size={16} className={`text-accent shrink-0 ${isPlayingAudio ? 'animate-pulse' : ''}`} />
+            <span className="font-medium text-xs truncate max-w-[150px] sm:max-w-xs">
               {article.clean_title || article.title}
             </span>
           </div>
 
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex items-center gap-1.5 shrink-0">
+            {/* Speed Selector */}
+            <div className="flex items-center gap-0.5 bg-surfaceRaised p-0.5 rounded-lg border border-surfaceBorder text-[10px]">
+              {([1.0, 1.25, 1.5] as const).map(rate => (
+                <button
+                  key={rate}
+                  onClick={() => {
+                    setSpeechRate(rate);
+                    if (isPlayingAudio) startAudioPlayback(rate);
+                  }}
+                  className={`px-1.5 py-0.5 rounded transition-colors ${
+                    speechRate === rate ? 'bg-accent text-white font-semibold' : 'text-textMuted hover:text-textPrimary'
+                  }`}
+                >
+                  {rate}x
+                </button>
+              ))}
+            </div>
+
             <button
-              onClick={() => {
-                if (audioRef.current) {
-                  if (isPlayingAudio) {
-                    audioRef.current.pause();
-                  } else {
-                    audioRef.current.play();
-                  }
-                }
-              }}
+              onClick={toggleAudioPlayback}
               className="p-1.5 rounded-full bg-accent text-white hover:bg-accent/90 shadow-xs"
+              title={isPlayingAudio ? "暂停朗读" : "开始朗读"}
             >
               {isPlayingAudio ? <Pause size={13} /> : <Play size={13} />}
             </button>
 
             <button
-              onClick={() => {
-                if (audioRef.current) audioRef.current.pause();
-                setIsAudioPlayerOpen(false);
-                setIsPlayingAudio(false);
-              }}
+              onClick={stopAudio}
               className="p-1 text-textMuted hover:text-textPrimary rounded-md hover:bg-surfaceRaised"
+              title="关闭播放器"
             >
               <X size={14} />
             </button>

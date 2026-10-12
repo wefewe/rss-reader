@@ -181,21 +181,40 @@ class AIService:
         rate: str = "+0%"
     ) -> bytes:
         """
-        Synthesizes text into high-quality MP3 audio using edge-tts.
+        Synthesizes text into high-quality MP3 audio using edge-tts with Google TTS fallback.
         """
-        import edge_tts
         clean_text = re.sub(r'[*_#`>\[\]\(\)]', '', text)
         clean_text = re.sub(r'https?://[^\s]+', '', clean_text)
-        clean_text = re.sub(r'\s+', ' ', clean_text).strip()[:3500]
+        clean_text = re.sub(r'\s+', ' ', clean_text).strip()[:1000]
         if not clean_text:
             clean_text = "暂无朗读内容。"
 
-        communicate = edge_tts.Communicate(clean_text, voice, rate=rate)
-        audio_chunks = []
-        async for chunk in communicate.stream():
-            if chunk["type"] == "audio":
-                audio_chunks.append(chunk["data"])
-        return b"".join(audio_chunks)
+        # 1. Try edge-tts
+        try:
+            import edge_tts
+            communicate = edge_tts.Communicate(clean_text, voice, rate=rate)
+            audio_chunks = []
+            async for chunk in communicate.stream():
+                if chunk["type"] == "audio":
+                    audio_chunks.append(chunk["data"])
+            if audio_chunks:
+                return b"".join(audio_chunks)
+        except Exception as e:
+            logger.warning(f"Edge-TTS stream unavailable ({e}), trying Google TTS stream")
+
+        # 2. Robust Google TTS fallback
+        try:
+            import urllib.parse
+            encoded = urllib.parse.quote(clean_text[:400])
+            url = f"https://translate.google.com/translate_tts?ie=UTF-8&q={encoded}&tl=zh-CN&client=tw-ob"
+            async with httpx.AsyncClient(headers={"User-Agent": "Mozilla/5.0"}, timeout=15.0) as client:
+                resp = await client.get(url)
+                if resp.status_code == 200:
+                    return resp.content
+        except Exception as e:
+            logger.error(f"Google TTS fallback error: {e}")
+
+        return b""
 
     async def triage_article(
         self,
