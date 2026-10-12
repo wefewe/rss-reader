@@ -284,7 +284,24 @@ async def run_daily_brief_job():
         await session.commit()
 
         # Telegram Push
-        more_link = f"\n\n[阅读更多]({settings.PUBLIC_URL})" if settings.PUBLIC_URL else ""
-        tg_text = f"*{brief['title']}*\n\n{brief['content'][:3000]}{more_link}"
-        await ai_service.push_telegram_notification(tg_text)
+        import html as py_html
+        clean_brief_title = py_html.escape(brief["title"])
+        brief_html = ai_service.markdown_to_telegram_html(brief["content"])
+
+        tg_text = f"""☕ <b>{clean_brief_title}</b>
+📅 <code>{today_str}</code> · <b>AI 晨间数字内参</b>
+━━━━━━━━━━━━━━━━━━━━━━
+<blockquote expandable>
+{brief_html}
+</blockquote>"""
+
+        reader_url = settings.PUBLIC_URL or "https://reader.cwsub.indevs.in"
+        reply_markup = {
+            "inline_keyboard": [
+                [
+                    {"text": "📖 进入图书阅读器", "url": reader_url}
+                ]
+            ]
+        }
+        await ai_service.push_telegram_notification(tg_text, parse_mode="HTML", reply_markup=reply_markup)
         logger.info("09:00 Daily Briefing generated and stored.")

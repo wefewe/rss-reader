@@ -534,23 +534,37 @@ async def forward_telegram_endpoint(body: ForwardTelegramInput, db: AsyncSession
     if not settings.TG_BOT_TOKEN or not settings.TG_CHAT_ID:
         raise HTTPException(status_code=500, detail="服务器未配置 Telegram 推送凭据")
 
-    lines = [
-        f"📖 *{article.title}*",
-        f"🏷️ 来源：`{article.source_title}` | 分组：`{article.group_name}`",
-        f"🔗 [查看原文]({article.url})",
-        "",
-        "💡 *AI 中文深度摘要*："
-    ]
-    if article.summary:
-        lines.append(article.summary[:2500])
-    else:
-        lines.append("（暂无AI摘要）")
+    import html as py_html
+    clean_title = py_html.escape(article.title)
+    clean_src = py_html.escape(article.source_title)
+    clean_grp = py_html.escape(article.group_name)
 
+    summary_html = ai_service.markdown_to_telegram_html(article.summary or "暂无 AI 摘要")
+
+    disc_info = ""
     if article.discussion_posts:
-        lines.append(f"\n💬 *包含 {len(article.discussion_posts)} 条精选回帖讨论*")
+        disc_info = f"\n💬 <i>包含 {len(article.discussion_posts)} 条精选社区回帖讨论</i>"
 
-    tg_text = "\n".join(lines)
-    await ai_service.push_telegram_notification(tg_text)
+    tg_html = f"""📖 <b>{clean_title}</b>
+🏷️ <code>{clean_src}</code> · <code>{clean_grp}</code>
+━━━━━━━━━━━━━━━━━━━━━━
+<blockquote expandable>
+💡 <b>AI 结构化摘要（点击展开）</b>
+
+{summary_html}
+</blockquote>{disc_info}"""
+
+    reader_url = settings.PUBLIC_URL or "https://reader.cwsub.indevs.in"
+    reply_markup = {
+        "inline_keyboard": [
+            [
+                {"text": "🌐 查看原文", "url": article.url},
+                {"text": "📖 站内精读", "url": reader_url}
+            ]
+        ]
+    }
+
+    await ai_service.push_telegram_notification(tg_html, parse_mode="HTML", reply_markup=reply_markup)
     return {"status": "ok", "message": "已成功推送到 Telegram 个人收藏夹"}
 
 # 16. Export OPML

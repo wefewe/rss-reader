@@ -367,9 +367,47 @@ class AIService:
             "is_fallback": True
         }
 
-    async def push_telegram_notification(self, text: str):
+    def markdown_to_telegram_html(self, md_text: str) -> str:
         """
-        Pushes notification to configured Telegram Chat ID.
+        Safely converts standard Markdown to Telegram HTML format.
+        Handles bold, italic, inline code, code blocks, bullet lists, blockquotes.
+        """
+        if not md_text:
+            return ""
+
+        import html as py_html
+        text = md_text.strip()
+        text = py_html.escape(text, quote=False)
+
+        # Code blocks ```code```
+        text = re.sub(r'```([a-zA-Z0-9_]*)\n([\s\S]*?)```', r'<pre><code>\2</code></pre>', text)
+        # Inline code `code`
+        text = re.sub(r'`([^`]+)`', r'<code>\1</code>', text)
+        # Headers (### / ## / #) into bold section titles
+        text = re.sub(r'^(?:#{1,6})\s+(.+)$', r'<b>\1</b>', text, flags=re.MULTILINE)
+        # Bold **text** or __text__
+        text = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text)
+        text = re.sub(r'__(.+?)__', r'<b>\1</b>', text)
+        # Italic *text* or _text_
+        text = re.sub(r'(?<![a-zA-Z0-9])\*([^\*\n]+)\*(?![a-zA-Z0-9])', r'<i>\1</i>', text)
+        text = re.sub(r'(?<![a-zA-Z0-9])_([^_\n]+)_(?![a-zA-Z0-9])', r'<i>\1</i>', text)
+        # Markdown bullets - or * at line start to •
+        text = re.sub(r'^\s*[-*]\s+', '• ', text, flags=re.MULTILINE)
+        # Blockquotes > text
+        text = re.sub(r'^(?:&gt;|>)\s*(.+)$', r'<blockquote>\1</blockquote>', text, flags=re.MULTILINE)
+        # Clean redundant blank lines
+        text = re.sub(r'\n{3,}', '\n\n', text)
+        return text.strip()
+
+    async def push_telegram_notification(
+        self,
+        text: str,
+        parse_mode: Optional[str] = "HTML",
+        reply_markup: Optional[Dict[str, Any]] = None
+    ):
+        """
+        Pushes notification to configured Telegram Chat ID with HTML formatting
+        and automatic plaintext fallback on parse errors.
         """
         if not settings.TG_BOT_TOKEN or not settings.TG_CHAT_ID:
             return
@@ -378,12 +416,24 @@ class AIService:
         payload = {
             "chat_id": settings.TG_CHAT_ID,
             "text": text,
-            "parse_mode": "Markdown",
             "disable_web_page_preview": True,
         }
+        if parse_mode:
+            payload["parse_mode"] = parse_mode
+        if reply_markup:
+            payload["reply_markup"] = reply_markup
+
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
-                await client.post(url, json=payload)
+                resp = await client.post(url, json=payload)
+                if resp.status_code != 200:
+                    logger.warning(f"Telegram push non-200 ({resp.status_code}): {resp.text}")
+                    # Fallback to plain text if HTML parsing failed
+                    if parse_mode:
+                        plain_text = re.sub(r'<[^>]+>', '', text)
+                        payload["text"] = plain_text
+                        payload.pop("parse_mode", None)
+                        await client.post(url, json=payload)
         except Exception as e:
             logger.warning(f"Telegram push failed: {e}")
 
