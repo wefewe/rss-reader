@@ -824,22 +824,36 @@ async def bilingual_translate_endpoint(body: ActionIDInput, db: AsyncSession = D
     if not article:
         raise HTTPException(status_code=404, detail="文章未找到")
 
-    # If cached, return immediately
-    if article.bilingual_content:
+    # If valid cache exists, return immediately
+    if article.bilingual_content and not article.bilingual_content.startswith("双语翻译超时"):
         return {"status": "ok", "bilingual_content": article.bilingual_content}
 
     pref = await db.get(ReaderPreference, 1)
     model = pref.summary_model if pref else "deepseek-v4.1-flash"
 
-    text_to_use = article.content or article.summary or ""
+    text_to_use = article.content
+    if not text_to_use and article.url:
+        try:
+            fetched_content = await extract_fulltext_from_url(article.url)
+            if fetched_content:
+                article.content = fetched_content
+                text_to_use = fetched_content
+        except Exception:
+            pass
+
+    if not text_to_use:
+        text_to_use = article.summary or ""
+
     bilingual = await ai_service.bilingual_translate(
         title=article.title,
         text=text_to_use,
         model=model
     )
 
-    article.bilingual_content = bilingual
-    await db.commit()
+    if bilingual and not bilingual.startswith("双语翻译超时"):
+        article.bilingual_content = bilingual
+        await db.commit()
+
     return {"status": "ok", "bilingual_content": bilingual}
 
 @router.get("/health")
