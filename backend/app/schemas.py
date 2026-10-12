@@ -28,6 +28,7 @@ class ArticleSchema(BaseModel):
     url: str
     summary: Optional[str] = None
     content: Optional[str] = None
+    bilingual_content: Optional[str] = None
     published_at: datetime.datetime
     fetched_at: datetime.datetime
     image_url: Optional[str] = None

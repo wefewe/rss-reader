@@ -811,6 +811,37 @@ async def explain_selection_endpoint(body: ExplainSelectionInput, db: AsyncSessi
     )
     return {"status": "ok", "explanation": explanation}
 
+# 21. AI Bilingual Translate (Follow 双语流)
+@router.post("/article/bilingual_translate")
+async def bilingual_translate_endpoint(body: ActionIDInput, db: AsyncSession = Depends(get_db)):
+    art_id = body.id
+    article = await db.get(Article, art_id)
+    if not article:
+        stmt = select(Article).where(Article.url == art_id).limit(1)
+        res = await db.execute(stmt)
+        article = res.scalars().first()
+
+    if not article:
+        raise HTTPException(status_code=404, detail="文章未找到")
+
+    # If cached, return immediately
+    if article.bilingual_content:
+        return {"status": "ok", "bilingual_content": article.bilingual_content}
+
+    pref = await db.get(ReaderPreference, 1)
+    model = pref.summary_model if pref else "deepseek-v4.1-flash"
+
+    text_to_use = article.content or article.summary or ""
+    bilingual = await ai_service.bilingual_translate(
+        title=article.title,
+        text=text_to_use,
+        model=model
+    )
+
+    article.bilingual_content = bilingual
+    await db.commit()
+    return {"status": "ok", "bilingual_content": bilingual}
+
 @router.get("/health")
 async def health_check():
     return {"status": "healthy", "service": "rss-reader", "timestamp": datetime.datetime.utcnow().isoformat()}

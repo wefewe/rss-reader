@@ -23,6 +23,7 @@ export interface Article {
   url: string;
   summary?: string;
   content?: string;
+  bilingual_content?: string;
   published_at: string;
   fetched_at: string;
   image_url?: string;

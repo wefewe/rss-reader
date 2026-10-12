@@ -323,5 +323,17 @@ export async function explainSelection(payload: {
   return data.explanation || '未能获取解析。';
 }
 
+export async function fetchBilingualTranslate(id: string): Promise<string> {
+  const res = await request(`${API_BASE}/article/bilingual_translate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id }),
+  });
+  if (!res.ok) throw new Error('双语对照生成超时');
+  const data = await res.json();
+  return data.bilingual_content || '';
+}
+
+
 
 

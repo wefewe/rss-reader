@@ -41,6 +41,7 @@ class Article(Base):
     url = Column(Text, nullable=False, index=True)
     summary = Column(Text, nullable=True)
     content = Column(Text, nullable=True)
+    bilingual_content = Column(Text, nullable=True)
     published_at = Column(DateTime, nullable=False, index=True)
     fetched_at = Column(DateTime, default=datetime.datetime.utcnow)
     image_url = Column(Text, nullable=True)

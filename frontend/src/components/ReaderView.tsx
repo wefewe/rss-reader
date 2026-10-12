@@ -20,7 +20,8 @@ import {
   Check,
   X,
   BookOpen,
-  Send
+  Send,
+  Languages
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { Article } from '../types';
@@ -28,7 +29,7 @@ import { DiscussionPosts } from './DiscussionPosts';
 import { ArticleAiAssistant } from './ArticleAiAssistant';
 import { TriageRadarBox } from './TriageRadarBox';
 import { HighlightSection } from './HighlightSection';
-import { forwardTelegram } from '../api';
+import { forwardTelegram, fetchBilingualTranslate } from '../api';
 import { formatBionicContent } from '../utils/bionic';
 
 interface ReaderViewProps {
@@ -79,6 +80,39 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
   const [isBionicReading, setIsBionicReading] = useState<boolean>(() => {
     return localStorage.getItem('reader_bionic_reading') === 'true';
   });
+
+  // Bilingual flow state (Follow 工作流)
+  const [isBilingualMode, setIsBilingualMode] = useState<boolean>(false);
+  const [isLoadingBilingual, setIsLoadingBilingual] = useState<boolean>(false);
+  const [bilingualContent, setBilingualContent] = useState<string | null>(null);
+
+  useEffect(() => {
+    setIsBilingualMode(false);
+    setIsLoadingBilingual(false);
+    setBilingualContent(article?.bilingual_content || null);
+  }, [article?.id]);
+
+  const handleToggleBilingual = async () => {
+    if (!article) return;
+    if (isBilingualMode) {
+      setIsBilingualMode(false);
+      return;
+    }
+    if (bilingualContent || article.bilingual_content) {
+      setIsBilingualMode(true);
+      return;
+    }
+    setIsLoadingBilingual(true);
+    try {
+      const text = await fetchBilingualTranslate(article.id);
+      setBilingualContent(text);
+      setIsBilingualMode(true);
+    } catch (err: any) {
+      alert(err.message || '双语对照生成失败');
+    } finally {
+      setIsLoadingBilingual(false);
+    }
+  };
 
   useEffect(() => {
     localStorage.setItem('reader_fontsize', String(fontSize));
@@ -345,6 +379,27 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
             )}
           </button>
 
+          {/* Bilingual Translation Toggle (Follow 工作流) */}
+          <button
+            onClick={handleToggleBilingual}
+            disabled={isLoadingBilingual}
+            className={`p-1.5 rounded-lg text-xs flex items-center gap-1 transition-colors ${
+              isBilingualMode
+                ? 'bg-accent/20 text-accent font-semibold border border-accent/30'
+                : 'text-textMuted hover:text-textPrimary hover:bg-surfaceRaised'
+            }`}
+            title={isBilingualMode ? "退出双语对照模式" : "开启 AI 逐段双语对照阅读流"}
+          >
+            {isLoadingBilingual ? (
+              <RefreshCw size={14} className="animate-spin text-accent" />
+            ) : (
+              <Languages size={15} />
+            )}
+            <span className="hidden sm:inline text-[11px]">
+              {isLoadingBilingual ? "翻译中..." : isBilingualMode ? "双语" : "双语对照"}
+            </span>
+          </button>
+
           {/* Zen Focus Mode Toggle */}
           <button
             onClick={onToggleZenMode}
@@ -499,7 +554,22 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
               lineHeight: lineHeight === 'relaxed' ? 2.0 : 1.75 
             }}
           >
-            {article.content ? (
+            {isBilingualMode && (
+              <div className="mb-4 p-3 rounded-xl bg-accent/10 border border-accent/25 flex items-center justify-between text-xs text-accent animate-in fade-in duration-150">
+                <div className="flex items-center gap-2 font-medium">
+                  <Languages size={15} />
+                  <span>正在呈现 AI 逐段双语对照流 (Follow模式 · 英文原文 + 中文精准释义)</span>
+                </div>
+                <button
+                  onClick={() => setIsBilingualMode(false)}
+                  className="text-[11px] underline hover:text-textPrimary transition-colors"
+                >
+                  切回原文
+                </button>
+              </div>
+            )}
+
+            {(isBilingualMode ? (bilingualContent || article.bilingual_content || article.content) : article.content) ? (
               <div className="prose max-w-none break-words leading-relaxed space-y-4">
                 <ReactMarkdown
                   components={{
@@ -526,7 +596,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
                     )
                   }}
                 >
-                  {article.content}
+                  {(isBilingualMode ? (bilingualContent || article.bilingual_content || article.content) : article.content) || ''}
                 </ReactMarkdown>
               </div>
             ) : (

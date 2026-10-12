@@ -41,6 +41,10 @@ async def init_db():
             await conn.execute(text("ALTER TABLE articles ADD COLUMN clean_title VARCHAR(500);"))
         except Exception:
             pass
+        try:
+            await conn.execute(text("ALTER TABLE articles ADD COLUMN bilingual_content TEXT;"))
+        except Exception:
+            pass
 
 
 

@@ -111,4 +111,20 @@ DEFAULT_FEED_SOURCES = [
         "group_name": "资源分享",
         "description": "LINUX DO 精品资源与开源工具分享",
     },
+    {
+        "id": "hackernews",
+        "title": "Hacker News (Best)",
+        "site_url": "https://news.ycombinator.com",
+        "feed_url": "https://hnrss.org/best",
+        "group_name": "全球前沿",
+        "description": "全球开发者与黑客精选前沿讨论",
+    },
+    {
+        "id": "arstechnica",
+        "title": "Ars Technica",
+        "site_url": "https://arstechnica.com",
+        "feed_url": "https://feeds.arstechnica.com/arstechnica/index",
+        "group_name": "全球前沿",
+        "description": "权威深度科技、系统架构与技术新闻",
+    },
 ]

@@ -143,6 +143,35 @@ class AIService:
         res = await self._call_llm(model, messages, temperature=0.2, max_tokens=250)
         return (res or "未能获取解析，请稍后重试。").strip()
 
+    async def bilingual_translate(
+        self,
+        title: str,
+        text: str,
+        model: Optional[str] = None
+    ) -> str:
+        """
+        Translates foreign/English text into high-quality paragraph-by-paragraph bilingual flow.
+        """
+        model = model or self.summary_model or "deepseek-v4.1-flash"
+        snippet = text[:5000] if text else "No content"
+
+        prompt = f"""你是一位精通全球前沿科技与开源生态的技术双语专家。请为以下外文文章生成优雅通顺的【逐段双语对照】阅读流。
+
+文章标题：{title}
+原文正文内容：
+{snippet}
+
+排版规范：
+1. 保持原文的自然段落结构，对每个段落：
+   - 第一行/块输出原始英文段落；
+   - 紧接着在其下方输出高质量、地道准确的中文翻译（格式采用引用块或斜体，如：`> 中文译文`）；
+2. 专有名词（如 API、方法名、包名、公司名、架构名）、代码块（```代码```）与内联代码（`code`）一律保留原文不翻；
+3. 输出 Markdown 格式，直接输出正文内容，绝不添加多余的前缀与客套话。"""
+
+        messages = [{"role": "user", "content": prompt}]
+        res = await self._call_llm(model, messages, temperature=0.2, max_tokens=2000)
+        return (res or "双语翻译超时，请稍后重试。").strip()
+
     async def triage_article(
         self,
         title: str,
