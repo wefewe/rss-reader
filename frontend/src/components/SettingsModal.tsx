@@ -426,6 +426,34 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 )}
               </div>
 
+              {/* Fever API Native Client Sync */}
+              <div className="space-y-2.5 bg-surfaceRaised/50 p-4 rounded-xl border border-surfaceBorder text-xs">
+                <div className="flex items-center justify-between">
+                  <span className="font-semibold text-textPrimary flex items-center gap-1.5">
+                    <span>📱 Fever 客户端集成 (Reeder / NetNewsWire)</span>
+                  </span>
+                  <span className="text-[10px] text-accent font-mono font-medium">Fever API v3</span>
+                </div>
+                <p className="text-[11px] text-textMuted">
+                  在 iOS / macOS / Android 上的原生阅读器中添加 Fever 账号，直接同步自建阅读流。
+                </p>
+
+                <div className="bg-surface p-2.5 rounded-lg border border-surfaceBorder space-y-1.5 font-mono text-[11px]">
+                  <div className="flex justify-between items-center">
+                    <span className="text-textMuted">服务器 (Endpoint):</span>
+                    <span className="text-textPrimary select-all">https://reader.cwsub.indevs.in/api/reader/fever</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-textMuted">用户名 (Username):</span>
+                    <span className="text-textPrimary">admin</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-textMuted">密码 (Password):</span>
+                    <span className="text-textPrimary">同阅读器口令</span>
+                  </div>
+                </div>
+              </div>
+
               {/* Live Feed Sources List Inspector */}
               <div className="space-y-2.5">
                 <div className="flex items-center justify-between">

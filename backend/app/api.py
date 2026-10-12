@@ -2,6 +2,9 @@ import logging
 import datetime
 import re
 import uuid
+import zlib
+import hashlib
+import time
 import xml.etree.ElementTree as ET
 from typing import Optional, List, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Body, Request, UploadFile, File
@@ -83,6 +86,141 @@ async def auth_logout():
 @public_router.get("/health")
 async def health_check():
     return {"status": "healthy", "service": "rss-reader", "timestamp": datetime.datetime.utcnow().isoformat()}
+
+def str_to_fever_id(s: str) -> int:
+    return zlib.crc32(s.encode()) & 0x7FFFFFFF
+
+# ── Fever API Endpoint (兼容 Reeder / NetNewsWire 原生客户端) ──
+@public_router.api_route("/fever", methods=["GET", "POST"])
+async def fever_endpoint(request: Request, db: AsyncSession = Depends(get_db)):
+    form_data = {}
+    try:
+        form_data = await request.form()
+    except Exception:
+        pass
+
+    params = {**request.query_params, **form_data}
+
+    # Authenticate via api_key: md5(username:password) or md5(password)
+    api_key = params.get("api_key", "").strip()
+    authed = False
+    if not settings.READER_PASSWORD:
+        authed = True
+    elif api_key:
+        expected1 = hashlib.md5(f"admin:{settings.READER_PASSWORD}".encode()).hexdigest()
+        expected2 = hashlib.md5(settings.READER_PASSWORD.encode()).hexdigest()
+        if api_key.lower() in [expected1.lower(), expected2.lower()]:
+            authed = True
+
+    resp_data = {
+        "api_version": 3,
+        "auth": 1 if authed else 0,
+        "last_refreshed_on_time": int(time.time()),
+    }
+
+    if not authed:
+        return resp_data
+
+    # Write Actions
+    if "mark" in params:
+        mark_target = params.get("mark")
+        mark_as = params.get("as")
+        target_id = params.get("id")
+        if mark_target == "item" and target_id:
+            try:
+                target_int = int(target_id)
+                art_res = await db.execute(select(Article))
+                for a in art_res.scalars().all():
+                    if str_to_fever_id(a.id) == target_int:
+                        if mark_as == "read":
+                            a.is_read = True
+                        elif mark_as == "unread":
+                            a.is_read = False
+                        elif mark_as == "saved":
+                            a.is_starred = True
+                        elif mark_as == "unsaved":
+                            a.is_starred = False
+                        await db.commit()
+                        break
+            except Exception as e:
+                logger.warning(f"Fever mark item error: {e}")
+
+    # Groups
+    if "groups" in params:
+        src_res = await db.execute(select(FeedSource))
+        all_sources = src_res.scalars().all()
+        unique_groups = sorted(list(set(s.group_name for s in all_sources)))
+
+        fever_groups = []
+        feeds_groups = []
+        for grp in unique_groups:
+            grp_id = str_to_fever_id(f"group:{grp}")
+            fever_groups.append({"id": grp_id, "title": grp})
+            group_feed_ids = [str(str_to_fever_id(s.id)) for s in all_sources if s.group_name == grp]
+            feeds_groups.append({"group_id": grp_id, "feed_ids": ",".join(group_feed_ids)})
+
+        resp_data["groups"] = fever_groups
+        resp_data["feeds_groups"] = feeds_groups
+
+    # Feeds
+    if "feeds" in params:
+        src_res = await db.execute(select(FeedSource))
+        all_sources = src_res.scalars().all()
+
+        fever_feeds = []
+        for s in all_sources:
+            fever_feeds.append({
+                "id": str_to_fever_id(s.id),
+                "favicon_id": 0,
+                "title": s.title,
+                "url": s.feed_url,
+                "site_url": s.site_url or "",
+                "is_spark": 0,
+                "last_updated_on_time": int(s.last_checked_at.timestamp()) if s.last_checked_at else int(time.time()),
+            })
+        resp_data["feeds"] = fever_feeds
+
+    # Items
+    if "items" in params:
+        stmt = select(Article).order_by(desc(Article.published_at)).limit(150)
+        art_res = await db.execute(stmt)
+        articles = art_res.scalars().all()
+
+        fever_items = []
+        for a in articles:
+            content_html = a.content or a.summary or ""
+            if a.summary and a.content:
+                content_html = f"<blockquote><b>[AI 深度摘要]</b><br/>{a.summary}</blockquote><hr/>{a.content}"
+            fever_items.append({
+                "id": str_to_fever_id(a.id),
+                "feed_id": str_to_fever_id(a.source_id),
+                "title": a.clean_title or a.title,
+                "author": a.source_title,
+                "html": content_html,
+                "url": a.url,
+                "is_saved": 1 if a.is_starred else 0,
+                "is_read": 1 if a.is_read else 0,
+                "created_on_time": int(a.published_at.timestamp()),
+            })
+        resp_data["items"] = fever_items
+        resp_data["total_items"] = len(articles)
+
+    # Unread Item IDs
+    if "unread_item_ids" in params:
+        stmt = select(Article.id).where(Article.is_read == False).limit(300)
+        unr_res = await db.execute(stmt)
+        unr_ids = [str(str_to_fever_id(r[0])) for r in unr_res.fetchall()]
+        resp_data["unread_item_ids"] = ",".join(unr_ids)
+
+    # Saved Item IDs
+    if "saved_item_ids" in params:
+        stmt = select(Article.id).where(Article.is_starred == True).limit(200)
+        saved_res = await db.execute(stmt)
+        s_ids = [str(str_to_fever_id(r[0])) for r in saved_res.fetchall()]
+        resp_data["saved_item_ids"] = ",".join(s_ids)
+
+    return resp_data
+
 
 # Helper: recalculate unread counts
 async def update_source_counters(session: AsyncSession, source_id: str):
@@ -858,6 +996,43 @@ async def bilingual_translate_endpoint(body: ActionIDInput, db: AsyncSession = D
         await db.commit()
 
     return {"status": "ok", "bilingual_content": bilingual}
+
+# 24. Edge-TTS 语音听文播客
+@router.get("/article/tts_audio")
+async def tts_audio_endpoint(
+    id: str = Query(...),
+    voice: Optional[str] = Query("zh-CN-YunxiNeural"),
+    db: AsyncSession = Depends(get_db)
+):
+    article = await db.get(Article, id)
+    if not article:
+        stmt = select(Article).where(Article.url == id).limit(1)
+        res = await db.execute(stmt)
+        article = res.scalars().first()
+
+    if not article:
+        raise HTTPException(status_code=404, detail="文章未找到")
+
+    text_parts = [f"正在为你朗读文章：{article.clean_title or article.title}。来源：{article.source_title}。"]
+    if article.summary:
+        text_parts.append(f"AI 核心要点：{article.summary}")
+    if article.content:
+        text_parts.append(f"正文内容摘录：{article.content[:1500]}")
+
+    speech_text = " ".join(text_parts)
+    audio_bytes = await ai_service.synthesize_speech(speech_text, voice=voice or "zh-CN-YunxiNeural")
+    if not audio_bytes:
+        raise HTTPException(status_code=502, detail="语音合成失败，请稍后重试")
+
+    safe_filename = f"article_{zlib.crc32(article.id.encode())}.mp3"
+    return Response(
+        content=audio_bytes,
+        media_type="audio/mpeg",
+        headers={
+            "Content-Disposition": f'inline; filename="{safe_filename}"',
+            "Cache-Control": "public, max-age=86400"
+        }
+    )
 
 @router.get("/health")
 async def health_check():

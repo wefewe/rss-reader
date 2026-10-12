@@ -21,7 +21,11 @@ import {
   X,
   BookOpen,
   Send,
-  Languages
+  Languages,
+  Headphones,
+  Volume2,
+  Play,
+  Pause
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { Article } from '../types';
@@ -29,7 +33,7 @@ import { DiscussionPosts } from './DiscussionPosts';
 import { ArticleAiAssistant } from './ArticleAiAssistant';
 import { TriageRadarBox } from './TriageRadarBox';
 import { HighlightSection } from './HighlightSection';
-import { forwardTelegram, fetchBilingualTranslate } from '../api';
+import { forwardTelegram, fetchBilingualTranslate, getAuthToken } from '../api';
 import { formatBionicContent } from '../utils/bionic';
 
 interface ReaderViewProps {
@@ -85,6 +89,16 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
   const [isBilingualMode, setIsBilingualMode] = useState<boolean>(false);
   const [isLoadingBilingual, setIsLoadingBilingual] = useState<boolean>(false);
   const [bilingualContent, setBilingualContent] = useState<string | null>(null);
+
+  // Audio Player State (Edge-TTS 伴读播客)
+  const [isPlayingAudio, setIsPlayingAudio] = useState<boolean>(false);
+  const [isAudioPlayerOpen, setIsAudioPlayerOpen] = useState<boolean>(false);
+  const audioRef = useRef<HTMLAudioElement>(null);
+
+  useEffect(() => {
+    setIsPlayingAudio(false);
+    setIsAudioPlayerOpen(false);
+  }, [article?.id]);
 
   useEffect(() => {
     setIsBilingualMode(false);
@@ -400,6 +414,25 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
             </span>
           </button>
 
+          {/* Edge-TTS Audio Player Toggle */}
+          <button
+            onClick={() => {
+              setIsAudioPlayerOpen(!isAudioPlayerOpen);
+              if (!isAudioPlayerOpen) {
+                setIsPlayingAudio(true);
+              }
+            }}
+            className={`p-1.5 rounded-lg text-xs flex items-center gap-1 transition-colors ${
+              isAudioPlayerOpen
+                ? 'bg-featuredBadge/20 text-featuredBadge font-semibold border border-featuredBadge/30'
+                : 'text-textMuted hover:text-textPrimary hover:bg-surfaceRaised'
+            }`}
+            title="Edge-TTS 自然语音听文 / 播客伴读"
+          >
+            <Headphones size={15} />
+            <span className="hidden sm:inline text-[11px]">听文</span>
+          </button>
+
           {/* Zen Focus Mode Toggle */}
           <button
             onClick={onToggleZenMode}
@@ -654,6 +687,54 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
           >
             <X size={20} />
           </button>
+        </div>
+      )}
+
+      {/* 5. Edge-TTS Floating Audio Player Bar */}
+      {isAudioPlayerOpen && article && (
+        <div className="absolute bottom-5 left-1/2 -translate-x-1/2 z-50 bg-surface/95 backdrop-blur-md border border-surfaceBorder rounded-2xl shadow-2xl p-2.5 px-4 flex items-center gap-3.5 text-xs text-textPrimary animate-in slide-in-from-bottom-2 duration-150 select-none">
+          <audio
+            ref={audioRef}
+            src={`/api/reader/article/tts_audio?id=${encodeURIComponent(article.id)}&token=${getAuthToken() || ''}`}
+            onPlay={() => setIsPlayingAudio(true)}
+            onPause={() => setIsPlayingAudio(false)}
+            onEnded={() => setIsPlayingAudio(false)}
+            autoPlay
+          />
+          <div className="flex items-center gap-2 min-w-0">
+            <Volume2 size={16} className="text-accent animate-pulse shrink-0" />
+            <span className="font-medium text-xs truncate max-w-[180px] sm:max-w-xs">
+              {article.clean_title || article.title}
+            </span>
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={() => {
+                if (audioRef.current) {
+                  if (isPlayingAudio) {
+                    audioRef.current.pause();
+                  } else {
+                    audioRef.current.play();
+                  }
+                }
+              }}
+              className="p-1.5 rounded-full bg-accent text-white hover:bg-accent/90 shadow-xs"
+            >
+              {isPlayingAudio ? <Pause size={13} /> : <Play size={13} />}
+            </button>
+
+            <button
+              onClick={() => {
+                if (audioRef.current) audioRef.current.pause();
+                setIsAudioPlayerOpen(false);
+                setIsPlayingAudio(false);
+              }}
+              className="p-1 text-textMuted hover:text-textPrimary rounded-md hover:bg-surfaceRaised"
+            >
+              <X size={14} />
+            </button>
+          </div>
         </div>
       )}
     </main>

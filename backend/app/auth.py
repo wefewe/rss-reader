@@ -60,8 +60,12 @@ async def require_auth(request: Request) -> bool:
         if verify_auth_token(token):
             return True
 
-    # 3. Check custom header or cookie
-    custom_token = request.headers.get("X-Reader-Token") or request.cookies.get("reader_auth_token")
+    # 3. Check custom header, cookie or query param
+    custom_token = (
+        request.headers.get("X-Reader-Token") 
+        or request.cookies.get("reader_auth_token")
+        or request.query_params.get("token")
+    )
     if custom_token and verify_auth_token(custom_token):
         return True
 

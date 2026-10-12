@@ -174,6 +174,29 @@ class AIService:
         res = await self._call_llm(model, messages, temperature=0.2, max_tokens=2000)
         return (res or "双语翻译超时，请稍后重试。").strip()
 
+    async def synthesize_speech(
+        self,
+        text: str,
+        voice: str = "zh-CN-YunxiNeural",
+        rate: str = "+0%"
+    ) -> bytes:
+        """
+        Synthesizes text into high-quality MP3 audio using edge-tts.
+        """
+        import edge_tts
+        clean_text = re.sub(r'[*_#`>\[\]\(\)]', '', text)
+        clean_text = re.sub(r'https?://[^\s]+', '', clean_text)
+        clean_text = re.sub(r'\s+', ' ', clean_text).strip()[:3500]
+        if not clean_text:
+            clean_text = "暂无朗读内容。"
+
+        communicate = edge_tts.Communicate(clean_text, voice, rate=rate)
+        audio_chunks = []
+        async for chunk in communicate.stream():
+            if chunk["type"] == "audio":
+                audio_chunks.append(chunk["data"])
+        return b"".join(audio_chunks)
+
     async def triage_article(
         self,
         title: str,
