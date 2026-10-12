@@ -99,3 +99,16 @@ class DigestRecord(Base):
     content = Column(Text, nullable=False) # Markdown
     is_fallback = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+class ArticleHighlight(Base):
+    __tablename__ = "article_highlights"
+
+    id = Column(String(100), primary_key=True)
+    article_id = Column(String(1000), nullable=False, index=True)
+    article_title = Column(String(500), nullable=True)
+    article_url = Column(Text, nullable=True)
+    text = Column(Text, nullable=False)
+    note = Column(Text, nullable=True)
+    color = Column(String(20), default="yellow") # yellow, green, red, purple
+    created_at = Column(DateTime, default=datetime.datetime.utcnow, index=True)
+

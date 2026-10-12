@@ -83,5 +83,16 @@ export interface DigestRecord {
   created_at: string;
 }
 
-export type ViewType = 'all' | 'unread' | 'starred' | 'featured';
+export interface ArticleHighlight {
+  id: string;
+  article_id: string;
+  article_title?: string;
+  article_url?: string;
+  text: string;
+  note?: string;
+  color: 'yellow' | 'green' | 'red' | 'purple';
+  created_at: string;
+}
+
+export type ViewType = 'all' | 'unread' | 'starred' | 'featured' | 'highlights';
 export type ThemeMode = 'dark' | 'light' | 'sepia';

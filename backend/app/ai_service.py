@@ -117,6 +117,32 @@ class AIService:
         res = await self._call_llm(model, messages, temperature=0.3, max_tokens=1000)
         return res or "AI 问答服务响应超时，请稍后重试。"
 
+    async def explain_selection(
+        self,
+        selected_text: str,
+        article_title: Optional[str] = None,
+        surrounding_context: Optional[str] = None,
+        model: Optional[str] = None
+    ) -> str:
+        """
+        Provides a concise 2~3 sentence contextual explanation for highlighted text or term.
+        """
+        model = model or self.summary_model or "deepseek-v4.1-flash"
+        ctx = f"\n上下文环境：\n{surrounding_context[:800]}" if surrounding_context else ""
+        art = f"《{article_title}》" if article_title else "当前文章"
+
+        prompt = f"""你是一位博学敏锐的技术与知识百科智囊。用户在阅读{art}时划选了以下内容：
+「{selected_text}」{ctx}
+
+请在 3 句话以内（100 字左右）给出精辟准确的即席科普解释：
+1. 本质定义或核心含义；
+2. 在当前语境下的具体所指或技术背景；
+直接输出解释文本，避免任何前缀与客套话。"""
+
+        messages = [{"role": "user", "content": prompt}]
+        res = await self._call_llm(model, messages, temperature=0.2, max_tokens=250)
+        return (res or "未能获取解析，请稍后重试。").strip()
+
     async def triage_article(
         self,
         title: str,

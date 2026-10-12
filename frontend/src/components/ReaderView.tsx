@@ -27,6 +27,7 @@ import { Article } from '../types';
 import { DiscussionPosts } from './DiscussionPosts';
 import { ArticleAiAssistant } from './ArticleAiAssistant';
 import { TriageRadarBox } from './TriageRadarBox';
+import { HighlightSection } from './HighlightSection';
 import { forwardTelegram } from '../api';
 
 interface ReaderViewProps {
@@ -524,6 +525,9 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
               </div>
             )}
           </article>
+
+          {/* Highlights & Inline Annotations Section */}
+          <HighlightSection article={article} containerRef={scrollContainerRef} />
 
           {/* Discussion Posts (LINUX DO Floors) */}
           {article.discussion_posts && article.discussion_posts.length > 0 && (

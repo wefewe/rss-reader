@@ -6,6 +6,7 @@ import { MorningBriefModal } from './components/MorningBriefModal';
 import { SettingsModal } from './components/SettingsModal';
 import { LoginScreen } from './components/LoginScreen';
 import { ShortcutHelpModal } from './components/ShortcutHelpModal';
+import { HighlightsHubView } from './components/HighlightsHubView';
 import { Article, FeedSource, ReaderPreferences, ViewType, ThemeMode } from './types';
 import { 
   listReader, 
@@ -230,6 +231,12 @@ export const App: React.FC = () => {
     }
   };
 
+  const handleSelectFromHighlights = (articleId: string) => {
+    setCurrentView('all');
+    setSelectedArticleId(articleId);
+    setMobileView('reader');
+  };
+
   const handleFetchFullText = async () => {
     if (!selectedArticleId) return;
     setIsLoadingFullText(true);
@@ -368,52 +375,61 @@ export const App: React.FC = () => {
         />
       </div>
 
-      {/* 2. Middle Article List Column */}
-      <div className={`h-full shrink-0 ${
-        mobileView === 'list' ? 'w-full block' : 'hidden'
-      } md:block ${isZenMode ? 'md:hidden' : ''}`}>
-        <ArticleList
+      {currentView === 'highlights' ? (
+        <HighlightsHubView
           articles={articles}
-          selectedArticleId={selectedArticleId}
-          onSelectArticle={handleSelectArticle}
-          onToggleStar={handleToggleStar}
-          onFeedback={handleFeedback}
-          onMarkAllRead={handleMarkAllRead}
-          onMarkBatchRead={handleMarkBatchRead}
-          searchQuery={searchQuery}
-          onSearchChange={setSearchQuery}
-          currentView={currentView}
-          filterTier={filterTier}
-          onFilterTierChange={setFilterTier}
-          tierCounts={tierCounts}
-          onBackToSidebar={() => setMobileView('sidebar')}
+          onSelectArticleById={handleSelectFromHighlights}
         />
-      </div>
+      ) : (
+        <>
+          {/* 2. Middle Article List Column */}
+          <div className={`h-full shrink-0 ${
+            mobileView === 'list' ? 'w-full block' : 'hidden'
+          } md:block ${isZenMode ? 'md:hidden' : ''}`}>
+            <ArticleList
+              articles={articles}
+              selectedArticleId={selectedArticleId}
+              onSelectArticle={handleSelectArticle}
+              onToggleStar={handleToggleStar}
+              onFeedback={handleFeedback}
+              onMarkAllRead={handleMarkAllRead}
+              onMarkBatchRead={handleMarkBatchRead}
+              searchQuery={searchQuery}
+              onSearchChange={setSearchQuery}
+              currentView={currentView}
+              filterTier={filterTier}
+              onFilterTierChange={setFilterTier}
+              tierCounts={tierCounts}
+              onBackToSidebar={() => setMobileView('sidebar')}
+            />
+          </div>
 
-      {/* 3. Right Immersive Reading Panel */}
-      <div className={`h-full flex-1 ${
-        mobileView === 'reader' ? 'w-full flex' : 'hidden'
-      } md:flex`}>
-        <ReaderView
-          article={selectedArticle}
-          onToggleRead={() => {
-            if (selectedArticle) {
-              const next = !selectedArticle.is_read;
-              setArticles(prev => prev.map(a => a.id === selectedArticle.id ? { ...a, is_read: next } : a));
-              setArticleRead(selectedArticle.id, next);
-            }
-          }}
-          onToggleStar={() => selectedArticleId && handleToggleStar(selectedArticleId)}
-          onFeedback={(type) => selectedArticleId && handleFeedback(selectedArticleId, type)}
-          onFetchFullText={handleFetchFullText}
-          onSummarize={handleSummarize}
-          isLoadingFullText={isLoadingFullText}
-          isLoadingSummary={isLoadingSummary}
-          onBackToList={() => setMobileView('list')}
-          isZenMode={isZenMode}
-          onToggleZenMode={() => setIsZenMode(prev => !prev)}
-        />
-      </div>
+          {/* 3. Right Immersive Reading Panel */}
+          <div className={`h-full flex-1 ${
+            mobileView === 'reader' ? 'w-full flex' : 'hidden'
+          } md:flex`}>
+            <ReaderView
+              article={selectedArticle}
+              onToggleRead={() => {
+                if (selectedArticle) {
+                  const next = !selectedArticle.is_read;
+                  setArticles(prev => prev.map(a => a.id === selectedArticle.id ? { ...a, is_read: next } : a));
+                  setArticleRead(selectedArticle.id, next);
+                }
+              }}
+              onToggleStar={() => selectedArticleId && handleToggleStar(selectedArticleId)}
+              onFeedback={(type) => selectedArticleId && handleFeedback(selectedArticleId, type)}
+              onFetchFullText={handleFetchFullText}
+              onSummarize={handleSummarize}
+              isLoadingFullText={isLoadingFullText}
+              isLoadingSummary={isLoadingSummary}
+              onBackToList={() => setMobileView('list')}
+              isZenMode={isZenMode}
+              onToggleZenMode={() => setIsZenMode(prev => !prev)}
+            />
+          </div>
+        </>
+      )}
 
       {/* Modals */}
       <MorningBriefModal

@@ -165,3 +165,45 @@ class DigestRecordSchema(BaseModel):
 
     class Config:
         from_attributes = True
+
+# Highlights & Annotations Schemas
+class ArticleHighlightSchema(BaseModel):
+    id: str
+    article_id: str
+    article_title: Optional[str] = None
+    article_url: Optional[str] = None
+    text: str
+    note: Optional[str] = None
+    color: str = "yellow"
+    created_at: datetime.datetime
+
+    class Config:
+        from_attributes = True
+
+class CreateHighlightInput(BaseModel):
+    article_id: str
+    text: str
+    note: Optional[str] = None
+    color: str = "yellow"
+
+class UpdateHighlightInput(BaseModel):
+    id: str
+    note: Optional[str] = None
+    color: Optional[str] = None
+
+class DeleteHighlightInput(BaseModel):
+    id: str
+
+class ListHighlightsInput(BaseModel):
+    article_id: Optional[str] = None
+    limit: int = 100
+
+class ExplainSelectionInput(BaseModel):
+    selected_text: str
+    article_title: Optional[str] = None
+    surrounding_context: Optional[str] = None
+
+class ExplainSelectionResponse(BaseModel):
+    status: str = "ok"
+    explanation: str
+

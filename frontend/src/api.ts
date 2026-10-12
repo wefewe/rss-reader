@@ -1,4 +1,4 @@
-import { Article, FeedSource, ReaderPreferences, DigestRecord, ViewType } from './types';
+import { Article, FeedSource, ReaderPreferences, DigestRecord, ViewType, ArticleHighlight } from './types';
 
 const API_BASE = '/api/reader';
 const TOKEN_KEY = 'reader_auth_token';
@@ -254,5 +254,74 @@ export async function importOpmlFile(file: File): Promise<{
   }
   return await res.json();
 }
+
+// Highlights & Annotations (Readwise 工作流)
+export async function createHighlight(payload: {
+  article_id: string;
+  text: string;
+  note?: string;
+  color?: string;
+}): Promise<ArticleHighlight> {
+  const res = await request(`${API_BASE}/highlights`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error('保存高亮失败');
+  return await res.json();
+}
+
+export async function listHighlights(params: {
+  article_id?: string;
+  limit?: number;
+} = {}): Promise<ArticleHighlight[]> {
+  const res = await request(`${API_BASE}/highlights/list`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  });
+  if (!res.ok) return [];
+  const data = await res.json();
+  return data.highlights || [];
+}
+
+export async function updateHighlight(payload: {
+  id: string;
+  note?: string;
+  color?: string;
+}): Promise<ArticleHighlight> {
+  const res = await request(`${API_BASE}/highlights/update`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error('更新批注失败');
+  return await res.json();
+}
+
+export async function deleteHighlight(id: string): Promise<void> {
+  const res = await request(`${API_BASE}/highlights/delete`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id }),
+  });
+  if (!res.ok) throw new Error('删除高亮失败');
+}
+
+export async function explainSelection(payload: {
+  selected_text: string;
+  article_title?: string;
+  surrounding_context?: string;
+}): Promise<string> {
+  const res = await request(`${API_BASE}/explain_selection`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) return '解析超时或失败，请稍后重试。';
+  const data = await res.json();
+  return data.explanation || '未能获取解析。';
+}
+
 
 

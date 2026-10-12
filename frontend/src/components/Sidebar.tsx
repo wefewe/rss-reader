@@ -16,6 +16,7 @@ import {
   Sun,
   Moon,
   Eye,
+  Bookmark,
 } from 'lucide-react';
 import { FeedSource, ViewType, ThemeMode } from '../types';
 
@@ -160,6 +161,21 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <Star size={15} />
             <span>星标收藏</span>
           </div>
+        </button>
+
+        <button
+          onClick={() => { onSelectView('highlights'); onSelectGroup('全部'); onSelectSource(''); }}
+          className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all ${
+            currentView === 'highlights'
+              ? 'bg-amber-400/15 text-amber-300 font-semibold'
+              : 'text-textMuted hover:text-textPrimary hover:bg-surfaceRaised/50'
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            <Bookmark size={15} />
+            <span>灵感划线库</span>
+          </div>
+          <span className="text-[10px] text-amber-400 font-mono">Readwise</span>
         </button>
       </div>
 

@@ -1,6 +1,7 @@
 import logging
 import datetime
 import re
+import uuid
 import xml.etree.ElementTree as ET
 from typing import Optional, List, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Body, Request, UploadFile, File
@@ -8,7 +9,7 @@ from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, delete, desc, func, or_, cast, String
 from .database import get_db
-from .models import FeedSource, Article, ReaderPreference, DigestRecord, ArticleImage
+from .models import FeedSource, Article, ReaderPreference, DigestRecord, ArticleImage, ArticleHighlight
 from .schemas import (
     ListReaderResponse,
     ArticleSchema,
@@ -29,6 +30,13 @@ from .schemas import (
     ForwardTelegramInput,
     ImportOpmlResponse,
     DeleteSourceInput,
+    ArticleHighlightSchema,
+    CreateHighlightInput,
+    UpdateHighlightInput,
+    DeleteHighlightInput,
+    ListHighlightsInput,
+    ExplainSelectionInput,
+    ExplainSelectionResponse,
 )
 from .feed_crawler import refresh_all_feeds, parse_date, clean_html, enrich_new_articles, run_daily_brief_job
 from .content_extractor import extract_fulltext_from_url
@@ -729,6 +737,77 @@ async def delete_source(body: DeleteSourceInput, db: AsyncSession = Depends(get_
     await db.commit()
 
     return {"status": "ok", "message": f"已成功删除订阅源: {source.title}"}
+
+# 19. Highlights & Annotations (Readwise 工作流)
+@router.post("/highlights", response_model=ArticleHighlightSchema)
+async def create_highlight(body: CreateHighlightInput, db: AsyncSession = Depends(get_db)):
+    article = await db.get(Article, body.article_id)
+    if not article:
+        stmt = select(Article).where(Article.url == body.article_id).limit(1)
+        res = await db.execute(stmt)
+        article = res.scalars().first()
+
+    hl_id = f"hl_{uuid.uuid4().hex[:12]}"
+    highlight = ArticleHighlight(
+        id=hl_id,
+        article_id=article.id if article else body.article_id,
+        article_title=article.title if article else "未知文章",
+        article_url=article.url if article else "",
+        text=body.text.strip(),
+        note=body.note.strip() if body.note else None,
+        color=body.color or "yellow",
+        created_at=datetime.datetime.utcnow()
+    )
+    db.add(highlight)
+    await db.commit()
+    await db.refresh(highlight)
+    return ArticleHighlightSchema.model_validate(highlight)
+
+@router.post("/highlights/list")
+async def list_highlights(body: ListHighlightsInput, db: AsyncSession = Depends(get_db)):
+    stmt = select(ArticleHighlight)
+    if body.article_id:
+        stmt = stmt.where(ArticleHighlight.article_id == body.article_id)
+    stmt = stmt.order_by(desc(ArticleHighlight.created_at)).limit(body.limit)
+    res = await db.execute(stmt)
+    items = res.scalars().all()
+    return {"highlights": [ArticleHighlightSchema.model_validate(h) for h in items]}
+
+@router.post("/highlights/update", response_model=ArticleHighlightSchema)
+async def update_highlight(body: UpdateHighlightInput, db: AsyncSession = Depends(get_db)):
+    hl = await db.get(ArticleHighlight, body.id)
+    if not hl:
+        raise HTTPException(status_code=404, detail="划线记录未找到")
+    if body.note is not None:
+        hl.note = body.note.strip() if body.note.strip() else None
+    if body.color is not None:
+        hl.color = body.color
+    await db.commit()
+    await db.refresh(hl)
+    return ArticleHighlightSchema.model_validate(hl)
+
+@router.post("/highlights/delete")
+async def delete_highlight(body: DeleteHighlightInput, db: AsyncSession = Depends(get_db)):
+    hl = await db.get(ArticleHighlight, body.id)
+    if not hl:
+        raise HTTPException(status_code=404, detail="划线记录未找到")
+    await db.delete(hl)
+    await db.commit()
+    return {"status": "ok", "message": "划线与批注已移除"}
+
+# 20. Contextual AI on Selection
+@router.post("/explain_selection", response_model=ExplainSelectionResponse)
+async def explain_selection_endpoint(body: ExplainSelectionInput, db: AsyncSession = Depends(get_db)):
+    pref = await db.get(ReaderPreference, 1)
+    model = pref.summary_model if pref else "deepseek-v4.1-flash"
+
+    explanation = await ai_service.explain_selection(
+        selected_text=body.selected_text,
+        article_title=body.article_title,
+        surrounding_context=body.surrounding_context,
+        model=model
+    )
+    return {"status": "ok", "explanation": explanation}
 
 @router.get("/health")
 async def health_check():
