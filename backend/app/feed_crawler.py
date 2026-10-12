@@ -286,7 +286,13 @@ async def run_daily_brief_job():
         # Telegram Push
         import html as py_html
         clean_brief_title = py_html.escape(brief["title"])
-        brief_html = ai_service.markdown_to_telegram_html(brief["content"])
+
+        raw_content = (brief["content"] or "").strip()
+        lines = raw_content.split("\n")
+        if lines and lines[0].startswith("#") and any(k in lines[0] for k in ["晨间", "早报", "内参"]):
+            raw_content = "\n".join(lines[1:]).strip()
+
+        brief_html = ai_service.markdown_to_telegram_html(raw_content)
 
         tg_text = f"""☕ <b>{clean_brief_title}</b>
 📅 <code>{today_str}</code> · <b>AI 晨间数字内参</b>

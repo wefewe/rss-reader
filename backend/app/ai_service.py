@@ -1,5 +1,7 @@
 import logging
 import json
+import re
+import html
 import httpx
 from typing import List, Dict, Any, Optional
 from .config import settings
@@ -370,20 +372,21 @@ class AIService:
     def markdown_to_telegram_html(self, md_text: str) -> str:
         """
         Safely converts standard Markdown to Telegram HTML format.
-        Handles bold, italic, inline code, code blocks, bullet lists, blockquotes.
+        Handles links, bold, italic, inline code, code blocks, bullet lists, blockquotes.
         """
         if not md_text:
             return ""
 
-        import html as py_html
         text = md_text.strip()
-        text = py_html.escape(text, quote=False)
+        text = html.escape(text, quote=False)
 
-        # Code blocks ```code```
-        text = re.sub(r'```([a-zA-Z0-9_]*)\n([\s\S]*?)```', r'<pre><code>\2</code></pre>', text)
+        # Markdown links [title](url)
+        text = re.sub(r'\[([^\]]+)\]\((https?://[^\s\)]+)\)', r'<a href="\2">\1</a>', text)
+        # Code blocks ```lang\ncode```
+        text = re.sub(r'```([a-zA-Z0-9_-]*)\n([\s\S]*?)```', r'<pre><code>\2</code></pre>', text)
         # Inline code `code`
         text = re.sub(r'`([^`]+)`', r'<code>\1</code>', text)
-        # Headers (### / ## / #) into bold section titles
+        # Headers (# ~ ######)
         text = re.sub(r'^(?:#{1,6})\s+(.+)$', r'<b>\1</b>', text, flags=re.MULTILINE)
         # Bold **text** or __text__
         text = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text)
@@ -399,23 +402,93 @@ class AIService:
         text = re.sub(r'\n{3,}', '\n\n', text)
         return text.strip()
 
+    def format_article_telegram_card(
+        self,
+        title: str,
+        source_title: str,
+        group_name: str,
+        summary: str,
+        url: str,
+        reader_url: str,
+        discussion_count: int = 0
+    ) -> Dict[str, Any]:
+        """
+        Builds a beautifully styled Telegram HTML card with:
+        - Escaped Title & Source & Category tags
+        - One-line TL;DR (if present) prominently visible outside the fold
+        - Detailed bullet points inside an expandable blockquote
+        - Clean inline keyboard buttons (original link + web reader)
+        """
+        clean_title = html.escape(title.strip())
+        clean_src = html.escape(source_title.strip())
+        clean_grp = html.escape(group_name.strip())
+
+        summary = (summary or "").strip()
+        tldr_part = ""
+        detail_lines = []
+
+        if summary:
+            lines = summary.split("\n")
+            for line in lines:
+                if not tldr_part and any(k in line for k in ["速览", "一句话", "💡"]):
+                    tldr_part = self.markdown_to_telegram_html(line)
+                else:
+                    detail_lines.append(line)
+
+        detail_html = self.markdown_to_telegram_html("\n".join(detail_lines))
+
+        card_parts = [
+            f"📖 <b>{clean_title}</b>",
+            f"🏷️ <code>{clean_src}</code> · <code>{clean_grp}</code>",
+            "━━━━━━━━━━━━━━━━━━━━━━"
+        ]
+
+        if tldr_part:
+            card_parts.append(tldr_part)
+            card_parts.append("")
+
+        if detail_html:
+            card_parts.append(f"<blockquote expandable>\n{detail_html}\n</blockquote>")
+
+        if discussion_count > 0:
+            card_parts.append(f"💬 <i>包含 {discussion_count} 条社区楼层讨论</i>")
+
+        text = "\n".join(card_parts)
+
+        # Truncate if exceeds safe length
+        if len(text) > 3900:
+            text = text[:3850] + "..."
+            if "<blockquote" in text and "</blockquote>" not in text:
+                text += "</blockquote>"
+
+        reply_markup = {
+            "inline_keyboard": [
+                [
+                    {"text": "🌐 查看原文", "url": url},
+                    {"text": "📖 站内精读", "url": reader_url}
+                ]
+            ]
+        }
+
+        return {"text": text, "reply_markup": reply_markup}
+
     async def push_telegram_notification(
         self,
         text: str,
         parse_mode: Optional[str] = "HTML",
         reply_markup: Optional[Dict[str, Any]] = None
-    ):
+    ) -> bool:
         """
         Pushes notification to configured Telegram Chat ID with HTML formatting
         and automatic plaintext fallback on parse errors.
         """
         if not settings.TG_BOT_TOKEN or not settings.TG_CHAT_ID:
-            return
+            return False
 
         url = f"https://api.telegram.org/bot{settings.TG_BOT_TOKEN}/sendMessage"
         payload = {
             "chat_id": settings.TG_CHAT_ID,
-            "text": text,
+            "text": text[:3950],
             "disable_web_page_preview": True,
         }
         if parse_mode:
@@ -426,15 +499,18 @@ class AIService:
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
                 resp = await client.post(url, json=payload)
-                if resp.status_code != 200:
-                    logger.warning(f"Telegram push non-200 ({resp.status_code}): {resp.text}")
-                    # Fallback to plain text if HTML parsing failed
-                    if parse_mode:
-                        plain_text = re.sub(r'<[^>]+>', '', text)
-                        payload["text"] = plain_text
-                        payload.pop("parse_mode", None)
-                        await client.post(url, json=payload)
+                if resp.status_code == 200:
+                    return True
+                
+                logger.warning(f"Telegram push failed ({resp.status_code}): {resp.text}, falling back to plain text")
+                # Fallback to plain text if HTML parsing failed
+                plain_text = re.sub(r'<[^>]+>', '', text)[:3950]
+                payload["text"] = plain_text
+                payload.pop("parse_mode", None)
+                fb_resp = await client.post(url, json=payload)
+                return fb_resp.status_code == 200
         except Exception as e:
             logger.warning(f"Telegram push failed: {e}")
+            return False
 
 ai_service = AIService()
