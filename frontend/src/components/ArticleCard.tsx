@@ -1,7 +1,7 @@
 import React from 'react';
 import { formatDistanceToNow, parseISO } from 'date-fns';
 import { zhCN } from 'date-fns/locale';
-import { Star, ThumbsUp, ThumbsDown, MessageSquare, Flame } from 'lucide-react';
+import { Star, ThumbsUp, ThumbsDown, MessageSquare, Flame, Layers } from 'lucide-react';
 import { Article } from '../types';
 
 interface ArticleCardProps {
@@ -10,6 +10,9 @@ interface ArticleCardProps {
   onSelect: () => void;
   onToggleStar: (e: React.MouseEvent) => void;
   onFeedback: (e: React.MouseEvent, type: 'like' | 'dislike') => void;
+  isDebuzz?: boolean;
+  relatedArticles?: Article[];
+  onSelectRelated?: (article: Article) => void;
 }
 
 export const ArticleCard: React.FC<ArticleCardProps> = ({
@@ -18,6 +21,9 @@ export const ArticleCard: React.FC<ArticleCardProps> = ({
   onSelect,
   onToggleStar,
   onFeedback,
+  isDebuzz = true,
+  relatedArticles,
+  onSelectRelated,
 }) => {
   const timeAgo = React.useMemo(() => {
     try {
@@ -42,6 +48,9 @@ export const ArticleCard: React.FC<ArticleCardProps> = ({
     if (!article.triage_signals || article.triage_signals.length === 0) return null;
     return article.triage_signals[0];
   }, [article.triage_signals]);
+
+  const isTitleDebuzzed = isDebuzz && article.clean_title && article.clean_title !== article.title;
+  const displayTitle = isTitleDebuzzed ? article.clean_title : article.title;
 
   return (
     <div
@@ -113,8 +122,13 @@ export const ArticleCard: React.FC<ArticleCardProps> = ({
       {/* Article Title */}
       <h3 className={`text-xs font-semibold leading-snug line-clamp-2 mb-1.5 ${
         article.is_read ? 'text-textPrimary/75 font-normal' : 'text-textPrimary'
-      }`}>
-        {article.title}
+      }`} title={isTitleDebuzzed ? `媒体原文: ${article.title}` : undefined}>
+        {displayTitle}
+        {isTitleDebuzzed && (
+          <span className="text-[9px] px-1 py-0.2 rounded bg-accent/15 text-accent border border-accent/20 font-normal ml-1 inline-block align-middle">
+            客观还原
+          </span>
+        )}
       </h3>
 
       {/* AI Summary Snippet */}
@@ -159,6 +173,33 @@ export const ArticleCard: React.FC<ArticleCardProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Story Cluster sub-list */}
+      {relatedArticles && relatedArticles.length > 0 && (
+        <div 
+          className="mt-2 pt-2 border-t border-surfaceBorder/50 space-y-1.5" 
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="flex items-center justify-between text-[10px] text-textMuted">
+            <span className="font-semibold text-accent flex items-center gap-1">
+              <Layers size={11} />
+              多源同题报道 ({relatedArticles.length}篇):
+            </span>
+          </div>
+          <div className="space-y-1">
+            {relatedArticles.map((rel) => (
+              <div
+                key={rel.id}
+                onClick={() => onSelectRelated && onSelectRelated(rel)}
+                className="flex items-center justify-between p-1 px-1.5 rounded bg-surfaceRaised/60 hover:bg-surfaceRaised text-[10px] cursor-pointer text-textMuted hover:text-textPrimary transition-colors"
+              >
+                <span className="truncate max-w-[200px]">{rel.title}</span>
+                <span className="shrink-0 text-textMuted/60 font-mono">[{rel.source_title}]</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 };

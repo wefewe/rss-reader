@@ -19,6 +19,7 @@ export interface Article {
   source_title: string;
   group_name: string;
   title: string;
+  clean_title?: string;
   url: string;
   summary?: string;
   content?: string;

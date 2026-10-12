@@ -37,6 +37,7 @@ class Article(Base):
     source_title = Column(String(255), nullable=False)
     group_name = Column(String(100), nullable=False, index=True)
     title = Column(String(500), nullable=False)
+    clean_title = Column(String(500), nullable=True)
     url = Column(Text, nullable=False, index=True)
     summary = Column(Text, nullable=True)
     content = Column(Text, nullable=True)

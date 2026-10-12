@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo } from 'react';
-import { Search, SlidersHorizontal, CheckCheck, Check, ArrowLeft } from 'lucide-react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Search, SlidersHorizontal, CheckCheck, Check, ArrowLeft, Wand2, Layers } from 'lucide-react';
 import { Article, ViewType } from '../types';
 import { ArticleCard } from './ArticleCard';
 
@@ -35,6 +35,21 @@ export const ArticleList: React.FC<ArticleListProps> = ({
   tierCounts,
   onBackToSidebar,
 }) => {
+  const [isDebuzz, setIsDebuzz] = useState<boolean>(() => {
+    return localStorage.getItem('reader_debuzz') !== 'false';
+  });
+  const [isClustered, setIsClustered] = useState<boolean>(() => {
+    return localStorage.getItem('reader_cluster') !== 'false';
+  });
+
+  useEffect(() => {
+    localStorage.setItem('reader_debuzz', String(isDebuzz));
+  }, [isDebuzz]);
+
+  useEffect(() => {
+    localStorage.setItem('reader_cluster', String(isClustered));
+  }, [isClustered]);
+
   // Filter by value tier (featured / all / hidden)
   const filteredArticles = useMemo(() => {
     return articles.filter(a => {
@@ -44,6 +59,59 @@ export const ArticleList: React.FC<ArticleListProps> = ({
       return a.value_tier !== 'hidden'; // Default: hide hidden low-value items unless explicitly selected
     });
   }, [articles, filterTier]);
+
+  // Stop words for story clustering
+  const STOP_WORDS = useMemo(() => new Set([
+    "的", "了", "在", "是", "被", "和", "与", "为", "对", "以", "等", "及", "已", "将", "也", "有", "上", "中", "下", "把", "到", "自", "从"
+  ]), []);
+
+  // 24-hour Story Clustering
+  const clusteredItems = useMemo(() => {
+    if (!isClustered) {
+      return filteredArticles.map(a => ({ primary: a, related: [] as Article[] }));
+    }
+
+    const getKeywords = (title: string) => {
+      const words = title.toLowerCase().match(/[a-zA-Z0-9]+|[\u4e00-\u9fa5]{2,4}/g) || [];
+      return new Set(words.filter(w => !STOP_WORDS.has(w) && w.length >= 2));
+    };
+
+    const clusters: { primary: Article; related: Article[] }[] = [];
+    const groupedIds = new Set<string>();
+
+    for (let i = 0; i < filteredArticles.length; i++) {
+      const a = filteredArticles[i];
+      if (groupedIds.has(a.id)) continue;
+
+      const kwA = getKeywords(a.clean_title || a.title);
+      const related: Article[] = [];
+
+      for (let j = i + 1; j < Math.min(filteredArticles.length, i + 35); j++) {
+        const b = filteredArticles[j];
+        if (groupedIds.has(b.id)) continue;
+
+        const kwB = getKeywords(b.clean_title || b.title);
+        let overlapCount = 0;
+        let hasLongTerm = false;
+
+        kwA.forEach(k => {
+          if (kwB.has(k)) {
+            overlapCount++;
+            if (k.length >= 5) hasLongTerm = true;
+          }
+        });
+
+        if (overlapCount >= 2 || hasLongTerm) {
+          related.push(b);
+          groupedIds.add(b.id);
+        }
+      }
+
+      clusters.push({ primary: a, related });
+    }
+
+    return clusters;
+  }, [filteredArticles, isClustered, STOP_WORDS]);
 
   // Compute unread articles above current selected article
   const unreadAboveIds = useMemo(() => {
@@ -88,6 +156,32 @@ export const ArticleList: React.FC<ArticleListProps> = ({
               className="w-full bg-surface border border-surfaceBorder rounded-lg pl-8 pr-3 py-1.5 text-xs text-textPrimary placeholder:text-textMuted/60 focus:outline-none focus:border-accent"
             />
           </div>
+
+          <button
+            onClick={() => setIsDebuzz(!isDebuzz)}
+            className={`p-1.5 rounded-lg border text-xs flex items-center gap-1 transition-colors shrink-0 ${
+              isDebuzz 
+                ? 'border-accent bg-accent/15 text-accent font-medium' 
+                : 'border-surfaceBorder bg-surface text-textMuted hover:text-textPrimary'
+            }`}
+            title={isDebuzz ? "去浮夸已开启：优先呈现客观事实标题" : "去浮夸已关闭：展示媒体原始标题"}
+          >
+            <Wand2 size={13} />
+            <span className="text-[11px] hidden sm:inline">去浮夸</span>
+          </button>
+
+          <button
+            onClick={() => setIsClustered(!isClustered)}
+            className={`p-1.5 rounded-lg border text-xs flex items-center gap-1 transition-colors shrink-0 ${
+              isClustered 
+                ? 'border-accent bg-accent/15 text-accent font-medium' 
+                : 'border-surfaceBorder bg-surface text-textMuted hover:text-textPrimary'
+            }`}
+            title={isClustered ? "同题聚类已开启：折叠合并24小时内同题多源报道" : "同题聚类已关闭：平铺展示所有报道"}
+          >
+            <Layers size={13} />
+            <span className="text-[11px] hidden sm:inline">聚合</span>
+          </button>
         </div>
 
         {/* Tier switcher pills */}
@@ -145,26 +239,29 @@ export const ArticleList: React.FC<ArticleListProps> = ({
 
       {/* Article List Scroll View */}
       <div className="flex-1 overflow-y-auto divide-y divide-surfaceBorder/60">
-        {filteredArticles.length === 0 ? (
+        {clusteredItems.length === 0 ? (
           <div className="p-8 text-center text-textMuted text-xs flex flex-col items-center justify-center gap-2 h-64">
             <SlidersHorizontal size={24} className="opacity-30" />
             <p>暂无符合当前筛选条件的文章</p>
           </div>
         ) : (
-          filteredArticles.map(article => (
+          clusteredItems.map(({ primary, related }) => (
             <ArticleCard
-              key={article.id}
-              article={article}
-              isSelected={selectedArticleId === article.id}
-              onSelect={() => onSelectArticle(article)}
+              key={primary.id}
+              article={primary}
+              isSelected={selectedArticleId === primary.id}
+              onSelect={() => onSelectArticle(primary)}
               onToggleStar={(e) => {
                 e.stopPropagation();
-                onToggleStar(article.id);
+                onToggleStar(primary.id);
               }}
               onFeedback={(e, type) => {
                 e.stopPropagation();
-                onFeedback(article.id, type);
+                onFeedback(primary.id, type);
               }}
+              isDebuzz={isDebuzz}
+              relatedArticles={related}
+              onSelectRelated={onSelectArticle}
             />
           ))
         )}

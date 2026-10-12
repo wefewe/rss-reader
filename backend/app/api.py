@@ -38,7 +38,7 @@ from .schemas import (
     ExplainSelectionInput,
     ExplainSelectionResponse,
 )
-from .feed_crawler import refresh_all_feeds, parse_date, clean_html, enrich_new_articles, run_daily_brief_job
+from .feed_crawler import refresh_all_feeds, parse_date, clean_html, enrich_new_articles, run_daily_brief_job, debuzz_title
 from .content_extractor import extract_fulltext_from_url
 from .ai_service import ai_service
 from .auth import require_auth, create_auth_token, verify_auth_token, TOKEN_VALIDITY_SECONDS
@@ -170,6 +170,8 @@ async def list_reader(
 
     for a in articles:
         schema = ArticleSchema.model_validate(a)
+        if not schema.clean_title:
+            schema.clean_title = debuzz_title(schema.title)
         signals = list(schema.triage_signals or [])
 
         haystack = f"{a.title} {a.summary or ''}".lower()

@@ -37,6 +37,11 @@ async def init_db():
             await conn.execute(text("ALTER TABLE reader_preferences ADD COLUMN muted_keywords JSON DEFAULT '[]';"))
         except Exception:
             pass
+        try:
+            await conn.execute(text("ALTER TABLE articles ADD COLUMN clean_title VARCHAR(500);"))
+        except Exception:
+            pass
+
 
 
 async def get_db():

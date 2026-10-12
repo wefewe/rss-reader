@@ -24,6 +24,7 @@ class ArticleSchema(BaseModel):
     source_title: str
     group_name: str
     title: str
+    clean_title: Optional[str] = None
     url: str
     summary: Optional[str] = None
     content: Optional[str] = None

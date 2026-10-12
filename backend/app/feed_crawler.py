@@ -1,6 +1,7 @@
 import logging
 import datetime
 import asyncio
+import re
 from typing import Any
 import feedparser
 import httpx
@@ -14,6 +15,23 @@ from .ai_service import ai_service
 from .config import settings
 
 logger = logging.getLogger("rss_reader.crawler")
+
+CLICKBAIT_PATTERNS = [
+    r"^【(?:突发|重磅|震惊|速看|提醒|重磅推荐|独家|大事件|官宣)】\s*",
+    r"^\[(?:突发|重磅|震惊|速看|提醒|独家|官宣)\]\s*",
+    r"^(?:突发|重磅|震惊|速看|彻底告别|绝了|惊呆|终于来了|紧急提醒|重大通知)[!！：:\s]+",
+    r"^(?:不可思议|彻底颠覆|太强了|居然这么简单|炸裂)[!！：:\s]+",
+    r"[，,\s]*(?:快上车|建议收藏|速度领|太炸裂了|赶紧看|千万别错过)[!！]*$",
+]
+
+def debuzz_title(raw_title: str) -> str:
+    if not raw_title:
+        return ""
+    cleaned = raw_title.strip()
+    for pat in CLICKBAIT_PATTERNS:
+        cleaned = re.sub(pat, "", cleaned, flags=re.IGNORECASE)
+    cleaned = cleaned.strip()
+    return cleaned if cleaned else raw_title
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 RSSReader/1.0",
@@ -129,6 +147,7 @@ async def fetch_single_feed(source: FeedSource):
                         source_title=source_title,
                         group_name=group_name,
                         title=title,
+                        clean_title=debuzz_title(title),
                         url=url,
                         summary=summary,
                         published_at=published_at,

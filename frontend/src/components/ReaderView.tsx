@@ -29,6 +29,7 @@ import { ArticleAiAssistant } from './ArticleAiAssistant';
 import { TriageRadarBox } from './TriageRadarBox';
 import { HighlightSection } from './HighlightSection';
 import { forwardTelegram } from '../api';
+import { formatBionicContent } from '../utils/bionic';
 
 interface ReaderViewProps {
   article: Article | null;
@@ -75,6 +76,9 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
   const [lineHeight, setLineHeight] = useState<'normal' | 'relaxed'>(() => {
     return (localStorage.getItem('reader_lineheight') as 'normal' | 'relaxed') || 'normal';
   });
+  const [isBionicReading, setIsBionicReading] = useState<boolean>(() => {
+    return localStorage.getItem('reader_bionic_reading') === 'true';
+  });
 
   useEffect(() => {
     localStorage.setItem('reader_fontsize', String(fontSize));
@@ -87,6 +91,10 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
   useEffect(() => {
     localStorage.setItem('reader_lineheight', lineHeight);
   }, [lineHeight]);
+
+  useEffect(() => {
+    localStorage.setItem('reader_bionic_reading', String(isBionicReading));
+  }, [isBionicReading]);
 
   // Reset scroll on article change
   useEffect(() => {
@@ -288,6 +296,22 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
                     </button>
                   </div>
                 </div>
+
+                {/* Bionic Reading Toggle */}
+                <div className="pt-2 border-t border-surfaceBorder/60">
+                  <label className="flex items-center justify-between cursor-pointer">
+                    <div>
+                      <span className="text-[11px] font-medium text-textPrimary">仿生跳读引导 (Bionic)</span>
+                      <p className="text-[10px] text-textMuted">加粗词汇前部，引导眼跳定焦</p>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={isBionicReading}
+                      onChange={(e) => setIsBionicReading(e.target.checked)}
+                      className="rounded border-surfaceBorder text-accent focus:ring-0 w-3.5 h-3.5 cursor-pointer"
+                    />
+                  </label>
+                </div>
               </div>
             )}
           </div>
@@ -479,6 +503,13 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
               <div className="prose max-w-none break-words leading-relaxed space-y-4">
                 <ReactMarkdown
                   components={{
+                    p: ({ children }) => {
+                      if (!isBionicReading) return <p className="mb-4 leading-relaxed">{children}</p>;
+                      if (typeof children === 'string') {
+                        return <p className="mb-4 leading-relaxed">{formatBionicContent(children)}</p>;
+                      }
+                      return <p className="mb-4 leading-relaxed">{children}</p>;
+                    },
                     img: ({ src, alt }) => (
                       <img
                         src={src}
