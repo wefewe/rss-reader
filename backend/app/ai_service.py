@@ -153,7 +153,9 @@ class AIService:
         Translates foreign/English text into high-quality paragraph-by-paragraph bilingual flow.
         """
         model = model or self.summary_model or "deepseek-v4.1-flash"
-        snippet = text[:5000] if text else "No content"
+        if isinstance(text, dict):
+            text = text.get("content", "")
+        snippet = str(text)[:5000] if text else "No content"
 
         prompt = f"""你是一位精通全球前沿科技与开源生态的技术双语专家。请为以下外文文章生成优雅通顺的【逐段双语对照】阅读流。
 

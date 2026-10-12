@@ -834,14 +834,17 @@ async def bilingual_translate_endpoint(body: ActionIDInput, db: AsyncSession = D
     text_to_use = article.content
     if not text_to_use and article.url:
         try:
-            fetched_content = await extract_fulltext_from_url(article.url)
-            if fetched_content:
-                article.content = fetched_content
-                text_to_use = fetched_content
+            fetched_res = await extract_fulltext_from_url(article.url)
+            if fetched_res and fetched_res.get("content"):
+                article.content = fetched_res["content"]
+                text_to_use = fetched_res["content"]
         except Exception:
             pass
 
-    if not text_to_use:
+    if isinstance(text_to_use, dict):
+        text_to_use = text_to_use.get("content", "")
+
+    if not text_to_use or not isinstance(text_to_use, str):
         text_to_use = article.summary or ""
 
     bilingual = await ai_service.bilingual_translate(
