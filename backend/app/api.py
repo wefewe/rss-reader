@@ -28,6 +28,7 @@ from .schemas import (
     AskArticleResponse,
     ForwardTelegramInput,
     ImportOpmlResponse,
+    DeleteSourceInput,
 )
 from .feed_crawler import refresh_all_feeds, parse_date, clean_html, enrich_new_articles, run_daily_brief_job
 from .content_extractor import extract_fulltext_from_url
@@ -452,10 +453,13 @@ async def set_article_feedback(body: SetArticleFeedbackInput, db: AsyncSession =
 @router.post("/markallread")
 async def mark_all_read(body: MarkAllReadInput, db: AsyncSession = Depends(get_db)):
     stmt = update(Article).values(is_read=True)
-    if body.group_name and body.group_name != "全部":
-        stmt = stmt.where(Article.group_name == body.group_name)
-    if body.source_id:
-        stmt = stmt.where(Article.source_id == body.source_id)
+    if body.article_ids:
+        stmt = stmt.where(Article.id.in_(body.article_ids))
+    else:
+        if body.group_name and body.group_name != "全部":
+            stmt = stmt.where(Article.group_name == body.group_name)
+        if body.source_id:
+            stmt = stmt.where(Article.source_id == body.source_id)
 
     await db.execute(stmt)
     await db.commit()
@@ -663,6 +667,21 @@ async def import_opml(file: UploadFile = File(...), db: AsyncSession = Depends(g
         "skipped_count": skipped,
         "new_sources": imported
     }
+
+# 18. deletesource
+@router.post("/deletesource")
+async def delete_source(body: DeleteSourceInput, db: AsyncSession = Depends(get_db)):
+    source = await db.get(FeedSource, body.id)
+    if not source:
+        raise HTTPException(status_code=404, detail="订阅源未找到")
+
+    # Delete all associated articles
+    await db.execute(delete(Article).where(Article.source_id == body.id))
+    # Delete the source
+    await db.delete(source)
+    await db.commit()
+
+    return {"status": "ok", "message": f"已成功删除订阅源: {source.title}"}
 
 @router.get("/health")
 async def health_check():

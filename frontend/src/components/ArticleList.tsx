@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo } from 'react';
-import { Search, SlidersHorizontal, CheckCheck, ArrowLeft } from 'lucide-react';
+import { Search, SlidersHorizontal, CheckCheck, Check, ArrowLeft } from 'lucide-react';
 import { Article, ViewType } from '../types';
 import { ArticleCard } from './ArticleCard';
 
@@ -10,6 +10,7 @@ interface ArticleListProps {
   onToggleStar: (articleId: string) => void;
   onFeedback: (articleId: string, feedback: 'like' | 'dislike') => void;
   onMarkAllRead: () => void;
+  onMarkBatchRead?: (articleIds: string[]) => void;
   searchQuery: string;
   onSearchChange: (query: string) => void;
   currentView: ViewType;
@@ -25,6 +26,7 @@ export const ArticleList: React.FC<ArticleListProps> = ({
   onToggleStar,
   onFeedback,
   onMarkAllRead,
+  onMarkBatchRead,
   searchQuery,
   onSearchChange,
   filterTier,
@@ -40,6 +42,14 @@ export const ArticleList: React.FC<ArticleListProps> = ({
       return a.value_tier !== 'hidden'; // Default: hide hidden low-value items unless explicitly selected
     });
   }, [articles, filterTier]);
+
+  // Compute unread articles above current selected article
+  const unreadAboveIds = useMemo(() => {
+    if (!selectedArticleId) return [];
+    const idx = filteredArticles.findIndex(a => a.id === selectedArticleId);
+    if (idx <= 0) return [];
+    return filteredArticles.slice(0, idx).filter(a => !a.is_read).map(a => a.id);
+  }, [filteredArticles, selectedArticleId]);
 
   // Keyboard J/K and navigation auto-scroll to keep active card in viewport
   useEffect(() => {
@@ -107,14 +117,27 @@ export const ArticleList: React.FC<ArticleListProps> = ({
             </button>
           </div>
 
-          <button
-            onClick={onMarkAllRead}
-            title="全部标为已读"
-            className="flex items-center gap-1 text-textMuted hover:text-accent transition-colors px-1.5 py-0.5 rounded hover:bg-surfaceRaised"
-          >
-            <CheckCheck size={13} />
-            <span>已读全部</span>
-          </button>
+          <div className="flex items-center gap-1.5">
+            {unreadAboveIds.length > 0 && onMarkBatchRead && (
+              <button
+                onClick={() => onMarkBatchRead(unreadAboveIds)}
+                title={`标记当前文章上方的 ${unreadAboveIds.length} 篇未读为已读`}
+                className="flex items-center gap-1 text-accent hover:text-accent/80 transition-colors px-1.5 py-0.5 rounded bg-accent/10 hover:bg-accent/15"
+              >
+                <Check size={12} />
+                <span>已读上方 ({unreadAboveIds.length})</span>
+              </button>
+            )}
+
+            <button
+              onClick={onMarkAllRead}
+              title="全部标为已读"
+              className="flex items-center gap-1 text-textMuted hover:text-accent transition-colors px-1.5 py-0.5 rounded hover:bg-surfaceRaised"
+            >
+              <CheckCheck size={13} />
+              <span>已读全部</span>
+            </button>
+          </div>
         </div>
       </div>
 

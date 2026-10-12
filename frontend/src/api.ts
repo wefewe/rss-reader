@@ -150,11 +150,19 @@ export async function setArticleFeedback(id: string, feedback: 'like' | 'dislike
   });
 }
 
-export async function markAllRead(params: { group_name?: string; source_id?: string }): Promise<void> {
+export async function markAllRead(params: { group_name?: string; source_id?: string; article_ids?: string[] }): Promise<void> {
   await request(`${API_BASE}/markallread`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(params),
+  });
+}
+
+export async function deleteSource(id: string): Promise<void> {
+  await request(`${API_BASE}/deletesource`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id }),
   });
 }
 

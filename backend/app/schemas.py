@@ -125,6 +125,10 @@ class SetArticleFeedbackInput(BaseModel):
 class MarkAllReadInput(BaseModel):
     group_name: Optional[str] = None
     source_id: Optional[str] = None
+    article_ids: Optional[List[str]] = None
+
+class DeleteSourceInput(BaseModel):
+    id: str
 
 class UpdateReaderPreferencesInput(BaseModel):
     preferences: Dict[str, Any]

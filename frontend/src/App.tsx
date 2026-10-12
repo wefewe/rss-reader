@@ -18,6 +18,7 @@ import {
   fetchArticleFullText,
   summarizeArticle,
   checkAuth,
+  deleteSource,
 } from './api';
 
 export const App: React.FC = () => {
@@ -194,6 +195,27 @@ export const App: React.FC = () => {
     }
   };
 
+  const handleMarkBatchRead = async (articleIds: string[]) => {
+    if (!articleIds || articleIds.length === 0) return;
+    try {
+      await markAllRead({ article_ids: articleIds });
+      const idSet = new Set(articleIds);
+      setArticles(prev => prev.map(a => idSet.has(a.id) ? { ...a, is_read: true } : a));
+      loadData();
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const handleDeleteSource = async (id: string) => {
+    try {
+      await deleteSource(id);
+      loadData();
+    } catch (e: any) {
+      alert(e.message || '删除订阅源失败');
+    }
+  };
+
   const handleFetchFullText = async () => {
     if (!selectedArticleId) return;
     setIsLoadingFullText(true);
@@ -343,6 +365,7 @@ export const App: React.FC = () => {
           onToggleStar={handleToggleStar}
           onFeedback={handleFeedback}
           onMarkAllRead={handleMarkAllRead}
+          onMarkBatchRead={handleMarkBatchRead}
           searchQuery={searchQuery}
           onSearchChange={setSearchQuery}
           currentView={currentView}
@@ -388,6 +411,8 @@ export const App: React.FC = () => {
         onClose={() => setIsSettingsModalOpen(false)}
         preferences={preferences}
         onPreferencesUpdated={setPreferences}
+        sources={sources}
+        onDeleteSource={handleDeleteSource}
       />
 
       <ShortcutHelpModal
