@@ -65,7 +65,8 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
   onToggleZenMode,
 }) => {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const [scrollPercent, setScrollPercent] = useState<number>(0);
+  const progressBarRef = useRef<HTMLDivElement>(null);
+  const progressTextRef = useRef<HTMLSpanElement>(null);
   const [activeLightboxImg, setActiveLightboxImg] = useState<string | null>(null);
   const [isCopied, setIsCopied] = useState<boolean>(false);
   const [isTypographyOpen, setIsTypographyOpen] = useState<boolean>(false);
@@ -204,24 +205,59 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     localStorage.setItem('reader_bionic_reading', String(isBionicReading));
   }, [isBionicReading]);
 
-  // Reset scroll on article change
+  // Reset scroll and progress indicators on article change
   useEffect(() => {
     if (scrollContainerRef.current) {
       scrollContainerRef.current.scrollTop = 0;
-      setScrollPercent(0);
+    }
+    if (progressBarRef.current) {
+      progressBarRef.current.style.width = '0%';
+    }
+    if (progressTextRef.current) {
+      progressTextRef.current.textContent = '0%';
     }
   }, [article?.id]);
 
   const handleScroll = () => {
     if (!scrollContainerRef.current) return;
     const { scrollTop, scrollHeight, clientHeight } = scrollContainerRef.current;
+    let percent = 0;
     if (scrollHeight <= clientHeight) {
-      setScrollPercent(100);
-      return;
+      percent = 100;
+    } else {
+      percent = Math.min(100, Math.max(0, Math.round((scrollTop / (scrollHeight - clientHeight)) * 100)));
     }
-    const percent = Math.min(100, Math.max(0, Math.round((scrollTop / (scrollHeight - clientHeight)) * 100)));
-    setScrollPercent(percent);
+    if (progressBarRef.current) {
+      progressBarRef.current.style.width = `${percent}%`;
+    }
+    if (progressTextRef.current) {
+      progressTextRef.current.textContent = `${percent}%`;
+    }
   };
+
+  // Stable markdown components definition to prevent re-mounting during re-renders
+  const markdownComponents = useMemo(() => ({
+    p: ({ children }: any) => {
+      if (!isBionicReading) return <p className="mb-4 leading-relaxed">{children}</p>;
+      if (typeof children === 'string') {
+        return <p className="mb-4 leading-relaxed">{formatBionicContent(children)}</p>;
+      }
+      return <p className="mb-4 leading-relaxed">{children}</p>;
+    },
+    img: ({ src, alt }: any) => (
+      <SafeImage
+        src={src}
+        alt={alt}
+        className="cursor-zoom-in rounded-xl max-w-full my-4 border border-surfaceBorder hover:opacity-95 transition-opacity"
+        onImageClick={(validSrc) => setActiveLightboxImg(validSrc)}
+      />
+    ),
+    a: ({ href, children }: any) => (
+      <a href={href} target="_blank" rel="noopener noreferrer">
+        {children}
+      </a>
+    )
+  }), [isBionicReading]);
 
   const wordStats = useMemo(() => {
     if (!article) return { chars: 0, minutes: 1 };
@@ -268,10 +304,11 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
 
   return (
     <main className="flex-1 bg-surface/10 flex flex-col h-screen overflow-hidden relative">
-      {/* 1. Thin Reading Progress Indicator at top */}
+      {/* 1. Thin Reading Progress Indicator at top (Direct hardware-accelerated style update) */}
       <div
-        className="absolute top-0 left-0 h-[2px] bg-accent transition-all duration-75 z-50 pointer-events-none"
-        style={{ width: `${scrollPercent}%` }}
+        ref={progressBarRef}
+        className="absolute top-0 left-0 h-[2px] bg-accent z-50 pointer-events-none transition-none"
+        style={{ width: '0%' }}
       />
 
       {/* 2. Top Action Bar */}
@@ -569,7 +606,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
               <span>•</span>
               <span>预估阅读 {wordStats.minutes} 分钟</span>
               <span>•</span>
-              <span>已读 {scrollPercent}%</span>
+              <span>已读 <span ref={progressTextRef}>0%</span></span>
             </div>
           </div>
 
@@ -658,30 +695,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
 
             {(isBilingualMode ? (bilingualContent || article.bilingual_content || article.content) : article.content) ? (
               <div className="prose max-w-none break-words leading-relaxed space-y-4">
-                <ReactMarkdown
-                  components={{
-                    p: ({ children }) => {
-                      if (!isBionicReading) return <p className="mb-4 leading-relaxed">{children}</p>;
-                      if (typeof children === 'string') {
-                        return <p className="mb-4 leading-relaxed">{formatBionicContent(children)}</p>;
-                      }
-                      return <p className="mb-4 leading-relaxed">{children}</p>;
-                    },
-                    img: ({ src, alt }) => (
-                      <SafeImage
-                        src={src}
-                        alt={alt}
-                        className="cursor-zoom-in rounded-xl max-w-full my-4 border border-surfaceBorder hover:opacity-95 transition-opacity"
-                        onImageClick={(validSrc) => setActiveLightboxImg(validSrc)}
-                      />
-                    ),
-                    a: ({ href, children }) => (
-                      <a href={href} target="_blank" rel="noopener noreferrer">
-                        {children}
-                      </a>
-                    )
-                  }}
-                >
+                <ReactMarkdown components={markdownComponents}>
                   {(isBilingualMode ? (bilingualContent || article.bilingual_content || article.content) : article.content) || ''}
                 </ReactMarkdown>
               </div>
