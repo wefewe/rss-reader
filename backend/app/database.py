@@ -50,6 +50,11 @@ async def init_db():
             await conn.execute(text("UPDATE articles SET content = summary WHERE (content IS NULL OR content = '') AND source_id LIKE 'linuxdo%' AND summary IS NOT NULL AND summary != '';"))
         except Exception:
             pass
+        # Upgrade default model to ultra-fast gemini-3.8-flash
+        try:
+            await conn.execute(text("UPDATE reader_preferences SET summary_model = 'gemini-3.8-flash' WHERE summary_model = 'deepseek-v4.1-flash';"))
+        except Exception:
+            pass
 
 
 

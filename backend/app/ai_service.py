@@ -24,6 +24,7 @@ class AIService:
             headers["Authorization"] = f"Bearer {self.api_key}"
 
         candidate_models = [model]
+        # Robust fallback sequence prioritized by latency & reliability on AxonHub
         for fb in ["gemini-3.8-flash", "glm-5.2", "kimi-k3"]:
             if fb not in candidate_models:
                 candidate_models.append(fb)
@@ -36,7 +37,8 @@ class AIService:
                 "max_tokens": max_tokens,
             }
             try:
-                async with httpx.AsyncClient(timeout=35.0) as client:
+                # 25s timeout per candidate model for agile failover
+                async with httpx.AsyncClient(timeout=25.0) as client:
                     resp = await client.post(f"{self.base_url}/chat/completions", headers=headers, json=payload)
                     if resp.status_code == 200:
                         data = resp.json()
@@ -47,6 +49,9 @@ class AIService:
                             if not content and msg.get("reasoning_content"):
                                 content = msg.get("reasoning_content", "").strip()
                             if content:
+                                # Strip accidental reasoning chain prefix if present
+                                if "💡" in content and not content.startswith("💡"):
+                                    content = "💡" + content.split("💡", 1)[1].strip()
                                 return content
                     else:
                         logger.warning(f"LLM call {current_model} failed HTTP {resp.status_code}: {resp.text[:150]}")

@@ -88,7 +88,7 @@ class ReaderPreference(Base):
     show_deal_alerts = Column(Boolean, default=True)
     show_sponsored = Column(Boolean, default=False)
     pure_rule_mode = Column(Boolean, default=False)
-    summary_model = Column(String(100), default="deepseek-v4.1-flash")
+    summary_model = Column(String(100), default="gemini-3.8-flash")
     brief_model = Column(String(100), default="gpt-5.6-terra")
     muted_keywords = Column(JSON, default=list)
 

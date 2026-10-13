@@ -80,7 +80,7 @@ class ReaderPreferencesSchema(BaseModel):
     show_deal_alerts: bool = True
     show_sponsored: bool = False
     pure_rule_mode: bool = False
-    summary_model: str = "deepseek-v4.1-flash"
+    summary_model: str = "gemini-3.8-flash"
     brief_model: str = "gpt-5.6-terra"
     muted_keywords: List[str] = []
 
