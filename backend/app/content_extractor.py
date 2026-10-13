@@ -46,16 +46,29 @@ async def extract_fulltext_from_url(url: str, timeout: float = 15.0) -> dict:
         )
 
         # 2. Extract leading image if available
-        soup = BeautifulSoup(html, "html.parser")
+        import re
         img_url = None
-        # og:image or first img inside article
-        og_img = soup.find("meta", property="og:image")
-        if og_img and og_img.get("content"):
-            img_url = og_img["content"]
-        else:
-            first_img = soup.find("img")
-            if first_img and first_img.get("src"):
-                img_url = first_img["src"]
+        # Check markdown image tags first (cleanest extracted content image)
+        if extracted:
+            img_match = re.search(r'!\[.*?\]\((https?://[^\s\)]+)\)', extracted)
+            if img_match:
+                img_url = img_match.group(1)
+
+        soup = BeautifulSoup(html, "html.parser")
+        if not img_url:
+            og_img = soup.find("meta", property="og:image")
+            if og_img and og_img.get("content"):
+                img_url = og_img["content"]
+
+        if not img_url:
+            # Look inside article or main content, skipping logos/avatars
+            content_area = soup.find("article") or soup.find("div", class_=re.compile(r"entry-content|post-content|article-content")) or soup.find("main")
+            if content_area:
+                for img in content_area.find_all("img"):
+                    src = img.get("src") or img.get("data-src") or img.get("data-original")
+                    if src and not re.search(r'logo|avatar|icon|qrcode|wechat|alipay', src, re.I):
+                        img_url = src
+                        break
 
         if extracted and len(extracted.strip()) > 50:
             return {

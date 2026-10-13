@@ -5,6 +5,8 @@ import uuid
 import zlib
 import hashlib
 import time
+import urllib.parse
+import httpx
 import xml.etree.ElementTree as ET
 from typing import Optional, List, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Body, Request, UploadFile, File
@@ -86,6 +88,59 @@ async def auth_logout():
 @public_router.get("/health")
 async def health_check():
     return {"status": "healthy", "service": "rss-reader", "timestamp": datetime.datetime.utcnow().isoformat()}
+
+# ── Smart Image Anti-Hotlinking Proxy (防盗链智能伪造与强缓存代理) ──
+@public_router.get("/proxy/image")
+async def proxy_image(url: str = Query(...)):
+    if not url or not url.startswith(("http://", "https://")):
+        raise HTTPException(status_code=400, detail="Invalid image URL")
+
+    parsed = urllib.parse.urlparse(url)
+    hostname = (parsed.hostname or "").lower()
+
+    # SSRF protection: block local and private networks
+    if hostname in ["localhost", "127.0.0.1", "0.0.0.0"] or hostname.startswith(("10.", "192.168.", "172.16.", "172.17.", "172.18.", "172.19.", "172.2", "172.3")):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    # Determine spoofed Referer based on image origin
+    referer = f"{parsed.scheme}://{parsed.netloc}/"
+    if "bohaishibei.com" in hostname:
+        referer = "https://www.bohaishibei.com/"
+    elif "qpic.cn" in hostname or "weixin.qq.com" in hostname:
+        referer = "https://mp.weixin.qq.com/"
+    elif "sinaimg.cn" in hostname or "weibo.com" in hostname:
+        referer = "https://weibo.com/"
+    elif "sspai.com" in hostname:
+        referer = "https://sspai.com/"
+    elif "zhimg.com" in hostname or "zhihu.com" in hostname:
+        referer = "https://www.zhihu.com/"
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Referer": referer,
+        "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True, verify=False) as client:
+            resp = await client.get(url, headers=headers)
+            if resp.status_code != 200:
+                raise HTTPException(status_code=resp.status_code, detail="Failed to fetch image from upstream")
+
+            content_type = resp.headers.get("content-type") or "image/jpeg"
+            return Response(
+                content=resp.content,
+                media_type=content_type,
+                headers={
+                    "Cache-Control": "public, max-age=2592000",
+                    "Access-Control-Allow-Origin": "*",
+                }
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"Image proxy error for {url}: {e}")
+        raise HTTPException(status_code=502, detail="Error fetching image")
 
 def str_to_fever_id(s: str) -> int:
     return zlib.crc32(s.encode()) & 0x7FFFFFFF
@@ -332,44 +387,67 @@ async def list_reader(
                 "label": "关键词静音"
             })
         else:
-            # 2. Check Promotion Preferences Switches
-            is_promo_hidden = False
-            if not pref.show_affiliate and (schema.promotion_score >= 0.6 or any(w in haystack for w in ["返利", "佣金", "推广码", "aff"])):
+            # 2. Check Commercial Ad Pattern (纯商业广告/商品导购过滤，严防误杀)
+            is_ad_pattern = False
+            ad_match_reason = ""
+            is_protected = any(k in haystack for k in [
+                "github.com/", "docker", "python", "linux", "kernel", "commit", "api", "sqlite", "nginx", "systemd",
+                "微语录精选", "博海拾贝", "段子", "知乎高赞", "每周精选", "财报", "反垄断", "芯片架构", "漏洞分析", "安全研究"
+            ])
+            if not is_protected:
+                if re.search(r"(?:\d+(?:\.\d+)?元包邮|券后(?:实付)?\d+(?:\.\d+)?元|折\d+(?:\.\d+)?元(?:/|[，,\s]|\)|）)|新低\d+(?:\.\d+)?元|到手(?:仅|只要)?\d+(?:\.\d+)?元|包邮[（\(]折\d+)", a.title):
+                    is_ad_pattern = True
+                    ad_match_reason = "商品促销包邮价格"
+                elif re.search(r"^(?:断码[，,]|白菜[!！]|好价[：:]|神价[!！]|手慢无[!！]|【(?:广告|推广|商务推广)】|（(?:推广|广告)）|特惠[：:])", a.title.strip()):
+                    is_ad_pattern = True
+                    ad_match_reason = "促销导购专属前缀"
+                elif re.search(r"百货\s*\d+\s*条|超值商品推荐|好物清单推荐|超值好物汇总|每日超值汇总", a.title):
+                    is_ad_pattern = True
+                    ad_match_reason = "纯商品推荐清单"
+
+            if is_ad_pattern:
                 schema.value_tier = "hidden"
-                signals.append({"dimension": "promotion", "effect": -0.4, "evidence": "偏好设置已过滤返利推广", "label": "返利过滤"})
-                is_promo_hidden = True
-            elif not pref.show_sponsored and (schema.content_type == "sponsored" or any(w in haystack for w in ["软文", "商业推广", "厂商赞助", "特约赞助"])):
-                schema.value_tier = "hidden"
-                signals.append({"dimension": "promotion", "effect": -0.4, "evidence": "偏好设置已过滤品牌软文", "label": "软文过滤"})
-                is_promo_hidden = True
-            elif not pref.show_big_sales and any(w in haystack for w in ["618", "双十一", "双11", "黑五", "大促"]):
-                schema.value_tier = "hidden"
-                signals.append({"dimension": "promotion", "effect": -0.3, "evidence": "偏好设置已过滤电商大促", "label": "大促过滤"})
-                is_promo_hidden = True
-            elif not pref.show_deal_alerts and (schema.group_name == "羊毛福利" or any(w in haystack for w in ["线报", "立减", "限免", "领券"])):
-                schema.value_tier = "hidden"
-                signals.append({"dimension": "promotion", "effect": -0.3, "evidence": "偏好设置已过滤实时线报", "label": "线报过滤"})
-                is_promo_hidden = True
+                schema.rank_score = 0.05
+                signals.append({"dimension": "promotion", "effect": -0.9, "evidence": f"命中{ad_match_reason}", "label": "商业推广"})
+            else:
+                # 3. Check Promotion Preferences Switches
+                is_promo_hidden = False
+                if not pref.show_affiliate and (schema.promotion_score >= 0.6 or any(w in haystack for w in ["返利", "佣金", "推广码", "aff"])):
+                    schema.value_tier = "hidden"
+                    signals.append({"dimension": "promotion", "effect": -0.4, "evidence": "偏好设置已过滤返利推广", "label": "返利过滤"})
+                    is_promo_hidden = True
+                elif not pref.show_sponsored and (schema.content_type == "sponsored" or any(w in haystack for w in ["软文", "商业推广", "厂商赞助", "特约赞助"])):
+                    schema.value_tier = "hidden"
+                    signals.append({"dimension": "promotion", "effect": -0.4, "evidence": "偏好设置已过滤品牌软文", "label": "软文过滤"})
+                    is_promo_hidden = True
+                elif not pref.show_big_sales and any(w in haystack for w in ["618", "双十一", "双11", "黑五", "大促"]):
+                    schema.value_tier = "hidden"
+                    signals.append({"dimension": "promotion", "effect": -0.3, "evidence": "偏好设置已过滤电商大促", "label": "大促过滤"})
+                    is_promo_hidden = True
+                elif not pref.show_deal_alerts and (schema.group_name == "羊毛福利" or any(w in haystack for w in ["线报", "立减", "限免", "领券"])):
+                    schema.value_tier = "hidden"
+                    signals.append({"dimension": "promotion", "effect": -0.3, "evidence": "偏好设置已过滤实时线报", "label": "线报过滤"})
+                    is_promo_hidden = True
 
-            # 3. Dynamic Feedback Bias
-            bias = source_bias.get(a.source_id, 0.0) + group_bias.get(a.group_name, 0.0)
-            if bias != 0:
-                schema.rank_score = max(0.0, min(1.0, round(schema.rank_score + bias, 2)))
+                # 4. Dynamic Feedback Bias
+                bias = source_bias.get(a.source_id, 0.0) + group_bias.get(a.group_name, 0.0)
+                if bias != 0:
+                    schema.rank_score = max(0.0, min(1.0, round(schema.rank_score + bias, 2)))
 
-            # 4. Temporal Decay & Star/Read Adjustment
-            pub_dt = a.published_at.replace(tzinfo=None) if hasattr(a.published_at, 'tzinfo') and a.published_at.tzinfo else a.published_at
-            age_hours = max(0.0, (now_dt - pub_dt).total_seconds() / 3600.0)
-            decay = 1.0 / (1.0 + (age_hours / 96.0)) # 96-hour half-life
+                # 5. Temporal Decay & Star/Read Adjustment
+                pub_dt = a.published_at.replace(tzinfo=None) if hasattr(a.published_at, 'tzinfo') and a.published_at.tzinfo else a.published_at
+                age_hours = max(0.0, (now_dt - pub_dt).total_seconds() / 3600.0)
+                decay = 1.0 / (1.0 + (age_hours / 96.0)) # 96-hour half-life
 
-            # High-tier articles stay high, while stale items decay gracefully
-            current_rank = schema.rank_score * (0.68 + 0.32 * decay)
+                # High-tier articles stay high, while stale items decay gracefully
+                current_rank = schema.rank_score * (0.68 + 0.32 * decay)
 
-            if a.is_starred:
-                current_rank = min(1.0, current_rank + 0.2)
-            if a.is_read:
-                current_rank = max(0.0, current_rank - 0.1)
+                if a.is_starred:
+                    current_rank = min(1.0, current_rank + 0.2)
+                if a.is_read:
+                    current_rank = max(0.0, current_rank - 0.1)
 
-            schema.rank_score = round(current_rank, 2)
+                schema.rank_score = round(current_rank, 2)
 
         schema.triage_signals = signals
         article_schemas.append(schema)

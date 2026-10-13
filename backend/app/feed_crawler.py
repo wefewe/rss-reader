@@ -5,6 +5,7 @@ import re
 from typing import Any
 import feedparser
 import httpx
+import trafilatura
 from bs4 import BeautifulSoup
 from dateutil import parser as date_parser
 from sqlalchemy import select, delete, func, desc
@@ -45,6 +46,37 @@ def clean_html(raw_html: str) -> str:
     for s in soup(["script", "style"]):
         s.decompose()
     return soup.get_text(separator=" ").strip()
+
+def extract_rich_content_and_image(raw_html: str):
+    """
+    Converts HTML content from RSS to clean markdown with images preserved,
+    and extracts the first meaningful content image.
+    """
+    if not raw_html:
+        return "", None
+
+    soup = BeautifulSoup(raw_html, "html.parser")
+    for s in soup(["script", "style", "noscript"]):
+        s.decompose()
+
+    first_img = None
+    for img in soup.find_all("img"):
+        src = img.get("src") or img.get("data-src") or img.get("data-original") or ""
+        alt = img.get("alt") or "image"
+        if src and not first_img and not re.search(r'logo|avatar|icon|qrcode|wechat|alipay', src, re.I):
+            first_img = src
+        if src:
+            img.replace_with(f"\n\n![{alt}]({src})\n\n")
+
+    for br in soup.find_all("br"):
+        br.replace_with("\n")
+    for p in soup.find_all("p"):
+        p.insert_before("\n\n")
+        p.insert_after("\n\n")
+
+    text = soup.get_text()
+    cleaned = re.sub(r'\n{3,}', '\n\n', text).strip()
+    return cleaned, first_img
 
 def parse_date(date_str: Any) -> datetime.datetime:
     if isinstance(date_str, datetime.datetime):
@@ -131,6 +163,21 @@ async def fetch_single_feed(source: FeedSource):
                 raw_summary = entry.get("summary") or entry.get("description") or ""
                 summary = clean_html(raw_summary)[:1000]
 
+                # Check rich full content from RSS (e.g. content:encoded)
+                raw_rich = ""
+                content_list = entry.get("content") or []
+                if content_list and isinstance(content_list, list):
+                    for c_item in content_list:
+                        if isinstance(c_item, dict) and c_item.get("value"):
+                            raw_rich = c_item["value"]
+                            break
+                elif entry.get("content_encoded"):
+                    raw_rich = entry.get("content_encoded")
+
+                content_md, entry_img = extract_rich_content_and_image(raw_rich or raw_summary)
+                if not content_md or len(content_md) < 50:
+                    content_md = None
+
                 pub_date = (
                     entry.get("published")
                     or entry.get("updated")
@@ -150,6 +197,8 @@ async def fetch_single_feed(source: FeedSource):
                         clean_title=debuzz_title(title),
                         url=url,
                         summary=summary,
+                        content=content_md,
+                        image_url=entry_img,
                         published_at=published_at,
                         fetched_at=datetime.datetime.utcnow(),
                         is_read=False,
@@ -160,9 +209,13 @@ async def fetch_single_feed(source: FeedSource):
                     session.add(art)
                     new_articles.append(art)
                 else:
-                    # Update summary if empty
+                    # Update summary/content/image if empty
                     if not existing_article.summary and summary:
                         existing_article.summary = summary
+                    if not existing_article.content and content_md:
+                        existing_article.content = content_md
+                    if not existing_article.image_url and entry_img:
+                        existing_article.image_url = entry_img
 
             # Rule 8.3: 50-article retention protection
             # Find all articles for this source ordered by published_at DESC

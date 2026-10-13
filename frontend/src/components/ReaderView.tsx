@@ -33,6 +33,7 @@ import { DiscussionPosts } from './DiscussionPosts';
 import { ArticleAiAssistant } from './ArticleAiAssistant';
 import { TriageRadarBox } from './TriageRadarBox';
 import { HighlightSection } from './HighlightSection';
+import { SafeImage } from './SafeImage';
 import { forwardTelegram, fetchBilingualTranslate, getAuthToken } from '../api';
 import { formatBionicContent } from '../utils/bionic';
 
@@ -618,16 +619,13 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
               onClick={() => setActiveLightboxImg(article.image_url || null)}
               className="rounded-xl overflow-hidden border border-surfaceBorder max-h-[420px] bg-surface flex items-center justify-center cursor-zoom-in group relative"
             >
-              <img
+              <SafeImage
                 src={article.image_url}
                 alt={article.image_alt || article.title}
                 className="w-full h-auto object-cover max-h-[420px] group-hover:scale-[1.01] transition-transform duration-200"
-                loading="lazy"
-                onError={(e) => {
-                  (e.target as HTMLElement).style.display = 'none';
-                }}
+                onImageClick={(validSrc) => setActiveLightboxImg(validSrc)}
               />
-              <span className="absolute bottom-2 right-2 px-2 py-0.5 rounded bg-black/60 text-white text-[10px] opacity-0 group-hover:opacity-100 transition-opacity">
+              <span className="absolute bottom-2 right-2 px-2 py-0.5 rounded bg-black/60 text-white text-[10px] opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
                 点击放大图片
               </span>
             </div>
@@ -670,12 +668,11 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
                       return <p className="mb-4 leading-relaxed">{children}</p>;
                     },
                     img: ({ src, alt }) => (
-                      <img
+                      <SafeImage
                         src={src}
                         alt={alt}
-                        onClick={() => src && setActiveLightboxImg(src)}
                         className="cursor-zoom-in rounded-xl max-w-full my-4 border border-surfaceBorder hover:opacity-95 transition-opacity"
-                        loading="lazy"
+                        onImageClick={(validSrc) => setActiveLightboxImg(validSrc)}
                       />
                     ),
                     a: ({ href, children }) => (
@@ -732,7 +729,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
           onClick={() => setActiveLightboxImg(null)}
           className="fixed inset-0 z-50 bg-black/90 backdrop-blur-md flex items-center justify-center p-4 cursor-zoom-out animate-in fade-in duration-150"
         >
-          <img
+          <SafeImage
             src={activeLightboxImg}
             alt="放大预览"
             className="max-w-full max-h-[92vh] object-contain rounded-xl shadow-2xl"

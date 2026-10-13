@@ -301,6 +301,61 @@ class AIService:
                         "rank_score": 0.15
                     }
 
+        # ── Layer 1.5: Pure Commercial Product Ads & Affiliate Spam (纯广告商品带货过滤，严防误杀) ──
+        # Check white-list first to guarantee 0 false-positives
+        is_protected = any(k in combined_lower for k in [
+            "github.com/", "docker", "python", "linux", "kernel", "commit", "api", "sqlite", "nginx", "systemd",
+            "微语录精选", "博海拾贝", "段子", "知乎高赞", "每周精选", "财报", "反垄断", "芯片架构", "漏洞分析", "安全研究"
+        ])
+        if not is_protected:
+            has_price_deal = bool(re.search(
+                r"(?:\d+(?:\.\d+)?元包邮|券后(?:实付)?\d+(?:\.\d+)?元|折\d+(?:\.\d+)?元(?:/|[，,\s]|\)|）)|新低\d+(?:\.\d+)?元|到手(?:仅|只要)?\d+(?:\.\d+)?元|包邮[（\(]折\d+)",
+                title
+            ))
+            promo_prefix = bool(re.search(
+                r"^(?:断码[，,]|白菜[!！]|好价[：:]|神价[!！]|手慢无[!！]|【(?:广告|推广|商务推广)】|（(?:推广|广告)）|特惠[：:])",
+                title.strip()
+            ))
+            is_shopping_roundup = bool(re.search(
+                r"百货\s*\d+\s*条|超值商品推荐|好物清单推荐|超值好物汇总|每日超值汇总",
+                title
+            ))
+            has_deal_body = bool(re.search(
+                r"售价\s*\d+\s*元[，,]\s*领取\s*\d+\s*元|券后实付\s*\d+\s*元|领券下单|复制淘口令|点击购买",
+                (text or "")[:400]
+            ))
+
+            is_ad = False
+            ad_evidence = ""
+            if has_price_deal:
+                is_ad = True
+                ad_evidence = "标题包含明确商品促销/包邮价格"
+            elif promo_prefix and (has_deal_body or "包邮" in title or "元" in title):
+                is_ad = True
+                ad_evidence = "命中促销导购专属前缀且含商品信息"
+            elif is_shopping_roundup:
+                is_ad = True
+                ad_evidence = "纯商品清单与导购专栏"
+            elif has_deal_body and len((text or "").strip()) < 800:
+                is_ad = True
+                ad_evidence = "正文包含纯电商优惠券转化文案"
+
+            if is_ad:
+                return {
+                    "value_tier": "hidden",
+                    "value_score": 0.1,
+                    "quality_score": 0.2,
+                    "promotion_score": 0.95,
+                    "expiry_score": 0.5,
+                    "content_type": "sponsored",
+                    "content_type_label": "推广",
+                    "reason": f"商业推广：{ad_evidence}",
+                    "signals": [
+                        {"dimension": "promotion", "effect": -0.9, "evidence": ad_evidence, "label": "商业推广"}
+                    ],
+                    "rank_score": 0.05
+                }
+
         # ── Layer 2: Low-Quality / Spam / Referral Begging (纯求码与极短灌水) ──
         begging_keywords = [
             "求个邀请码", "求邀请码", "求个码", "求码", "求邀请",
