@@ -51,22 +51,45 @@ def extract_rich_content_and_image(raw_html: str):
     """
     Converts HTML content from RSS to clean markdown with images preserved,
     and extracts the first meaningful content image.
+    Handles lazy-loaded images (data-lazy-src / data-src) and dedupes noscript fallbacks.
     """
     if not raw_html:
         return "", None
 
     soup = BeautifulSoup(raw_html, "html.parser")
-    for s in soup(["script", "style", "noscript"]):
+    for s in soup(["script", "style"]):
+        s.decompose()
+
+    # Promote lazy-loaded image attributes to real src
+    then_remove = []
+    for img in soup.find_all("img"):
+        lazy_src = None
+        for attr in ("data-lazy-src", "data-src", "data-original", "data-lazy", "data-url"):
+            if img.get(attr):
+                lazy_src = img.get(attr)
+                break
+        if lazy_src:
+            img["src"] = lazy_src
+        src = img.get("src") or ""
+        if src.startswith("data:image/svg") or src.startswith("data:image/gif"):
+            then_remove.append(img)
+    for img in then_remove:
+        img.decompose()
+    for s in soup(["noscript"]):
         s.decompose()
 
     first_img = None
+    seen_img_urls = set()
     for img in soup.find_all("img"):
-        src = img.get("src") or img.get("data-src") or img.get("data-original") or ""
+        src = img.get("src") or ""
         alt = img.get("alt") or "image"
-        if src and not first_img and not re.search(r'logo|avatar|icon|qrcode|wechat|alipay', src, re.I):
+        if src and not first_img and not re.search(r'logo|avatar|icon|qrcode|wechat|alipay|flag', src, re.I):
             first_img = src
-        if src:
+        if src and src not in seen_img_urls:
+            seen_img_urls.add(src)
             img.replace_with(f"\n\n![{alt}]({src})\n\n")
+        else:
+            img.decompose()
 
     for br in soup.find_all("br"):
         br.replace_with("\n")
@@ -263,9 +286,13 @@ async def fetch_single_feed(source: FeedSource):
 
 async def enrich_new_articles(articles: list):
     """
-    Asynchronously runs AI triage and summary pre-computation for new articles.
+    Asynchronously runs full-text extraction (for summary-only feeds),
+    AI triage and summary pre-computation for new articles.
     Ensures 0 latency when the user views the articles!
     """
+    from .content_extractor import extract_fulltext_from_url
+
+    auto_fetch_budget = 6  # bound per-batch network fetches
     for a in articles[:10]: # Batch up to 10 to avoid bursting
         try:
             async with async_session() as session:
@@ -273,22 +300,48 @@ async def enrich_new_articles(articles: list):
                 if pref and pref.pure_rule_mode:
                     break # Skip AI in pure rule mode
 
+                is_forum = a.source_id.startswith("linuxdo") or bool(a.discussion_posts) or "linux.do" in (a.url or "")
+
+                # 0. Auto-fetch full text for summary-only feeds (non-forum, no content yet)
+                if not is_forum and not a.content and auto_fetch_budget > 0 and a.url:
+                    short_summary = (a.summary or "").strip()
+                    if len(short_summary) < 600:
+                        auto_fetch_budget -= 1
+                        try:
+                            ft = await extract_fulltext_from_url(a.url)
+                            if ft and ft.get("content"):
+                                a.content = ft["content"]
+                                if ft.get("image_url") and not a.image_url:
+                                    a.image_url = ft["image_url"]
+                        except Exception as fe:
+                            logger.warning(f"Auto fulltext failed for {a.url}: {fe}")
+
+                # Determine richest available text for AI enrichment
+                enrich_text = a.content or a.summary or ""
+
                 # 1. AI Triage with multi-layer filtering
                 triage = await ai_service.triage_article(
                     a.title,
-                    a.summary or "",
+                    enrich_text,
                     a.source_title,
                     group_name=a.group_name,
                     discussion_posts=a.discussion_posts or [],
                     extra_meta={"source_id": a.source_id}
                 )
-                
+
                 # 2. AI Summary
-                ai_sum = await ai_service.summarize_article(a.title, a.summary or "", pref.summary_model if pref else None)
+                ai_sum = await ai_service.summarize_article(
+                    a.title,
+                    enrich_text,
+                    pref.summary_model if pref else None,
+                    discussion_posts=a.discussion_posts or []
+                )
 
                 # Re-fetch article to update
                 db_a = await session.get(Article, a.id)
                 if db_a:
+                    db_a.content = a.content or db_a.content
+                    db_a.image_url = a.image_url or db_a.image_url
                     db_a.value_tier = triage.get("value_tier", "general")
                     db_a.value_score = triage.get("value_score", 0.5)
                     db_a.quality_score = triage.get("quality_score", 0.5)
