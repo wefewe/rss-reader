@@ -25,7 +25,8 @@ import {
   Headphones,
   Volume2,
   Play,
-  Pause
+  Pause,
+  MessageSquare
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { Article } from '../types';
@@ -266,6 +267,14 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     const minutes = Math.max(1, Math.ceil(chars / 380));
     return { chars, minutes };
   }, [article]);
+
+  const isForumTopic = Boolean(
+    article?.source_id.startsWith('linuxdo') || 
+    (article?.discussion_posts && article.discussion_posts.length > 0) ||
+    article?.url.includes('linux.do')
+  );
+
+  const effectiveContent = article?.content || (isForumTopic ? article?.summary : null);
 
   const handleCopyMarkdown = () => {
     if (!article) return;
@@ -538,8 +547,8 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
             {isZenMode ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
           </button>
 
-          {/* Fetch Fulltext */}
-          {!article.content && (
+          {/* Fetch Fulltext (Hide for forum topics as OP and floors are synced natively) */}
+          {!effectiveContent && !isForumTopic && (
             <button
               onClick={onFetchFullText}
               disabled={isLoadingFullText}
@@ -693,10 +702,22 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
               </div>
             )}
 
-            {(isBilingualMode ? (bilingualContent || article.bilingual_content || article.content) : article.content) ? (
+            {isForumTopic && (
+              <div className="mb-4 p-2.5 px-3 rounded-xl bg-surfaceRaised/60 border border-surfaceBorder/80 flex items-center justify-between text-xs text-textMuted select-none">
+                <div className="flex items-center gap-1.5 font-medium text-textPrimary">
+                  <MessageSquare size={14} className="text-accent" />
+                  <span>Discourse 社区主题帖（1 楼楼主首发）</span>
+                </div>
+                <span className="text-[11px] font-mono text-textMuted">
+                  {article.discussion_posts ? `${article.discussion_posts.length} 条互动讨论` : ''}
+                </span>
+              </div>
+            )}
+
+            {(isBilingualMode ? (bilingualContent || article.bilingual_content || effectiveContent) : effectiveContent) ? (
               <div className="prose max-w-none break-words leading-relaxed space-y-4">
                 <ReactMarkdown components={markdownComponents}>
-                  {(isBilingualMode ? (bilingualContent || article.bilingual_content || article.content) : article.content) || ''}
+                  {(isBilingualMode ? (bilingualContent || article.bilingual_content || effectiveContent) : effectiveContent) || ''}
                 </ReactMarkdown>
               </div>
             ) : (

@@ -542,14 +542,18 @@ async def ingest_external_feed(data: IngestExternalFeedInput, db: AsyncSession =
         existing = await db.get(Article, art_id)
 
         if not existing:
+            # For forum entries, OP post text is the primary content
+            op_content = item.content or item.summary or ""
             art = Article(
                 id=art_id,
                 source_id=source_id,
                 source_title=source_title,
                 group_name=group_name,
                 title=item.title.strip(),
+                clean_title=debuzz_title(item.title.strip()),
                 url=url,
                 summary=item.summary or "",
+                content=op_content if op_content else None,
                 published_at=pub_at,
                 image_url=item.image_url,
                 discussion_posts=item.discussion_posts or [],
@@ -565,6 +569,10 @@ async def ingest_external_feed(data: IngestExternalFeedInput, db: AsyncSession =
                 existing.discussion_posts = item.discussion_posts
             if item.summary:
                 existing.summary = item.summary
+            if item.content:
+                existing.content = item.content
+            elif not existing.content and item.summary:
+                existing.content = item.summary
             if item.image_url:
                 existing.image_url = item.image_url
 
@@ -609,6 +617,19 @@ async def fetch_article_full_text(body: ActionIDInput, db: AsyncSession = Depend
     if not article:
         raise HTTPException(status_code=404, detail="文章不存在")
 
+    # Forum / Protected Sources Exemption (LINUX DO 等论坛特化，防 Cloudflare 403)
+    is_forum = article.source_id.startswith("linuxdo") or bool(article.discussion_posts) or "linux.do" in article.url
+    if is_forum:
+        if not article.content:
+            article.content = article.summary or "论坛主题内容（详见下方楼层讨论）"
+            await db.commit()
+            await db.refresh(article)
+        return {
+            "status": "ok",
+            "article": ArticleSchema.model_validate(article),
+            "message": "论坛主题内容与楼层讨论已就绪"
+        }
+
     res = await extract_fulltext_from_url(article.url)
     if res["content"]:
         article.content = res["content"]
@@ -635,10 +656,17 @@ async def summarize_article_endpoint(body: ActionIDInput, db: AsyncSession = Dep
     pref = await db.get(ReaderPreference, 1)
     text_to_summarize = article.content or article.summary or article.title
     ai_summary = await ai_service.summarize_article(
-        article.title, text_to_summarize, pref.summary_model if pref else None
+        article.title,
+        text_to_summarize,
+        pref.summary_model if pref else None,
+        discussion_posts=article.discussion_posts or []
     )
 
     article.summary = ai_summary
+    # Ensure OP content is preserved in article.content for forum posts
+    if not article.content and text_to_summarize and text_to_summarize != article.title:
+        article.content = text_to_summarize
+
     await db.commit()
     await db.refresh(article)
     return {"status": "ok", "summary": ai_summary, "article": ArticleSchema.model_validate(article)}

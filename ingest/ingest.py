@@ -226,6 +226,7 @@ async def crawl_feed(context, feed_info: dict, watermark: dict) -> list:
                     "url": link,
                     "published_at": topic_data.get("created_at") or pub_date_str,
                     "summary": main_text[:1200],
+                    "content": main_text,
                     "image_url": img_url,
                     "discussion_posts": discussion_posts,
                 })

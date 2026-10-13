@@ -103,6 +103,7 @@ class IngestEntry(BaseModel):
     url: str
     published_at: Optional[str] = None
     summary: Optional[str] = None
+    content: Optional[str] = None
     discussion_posts: Optional[List[Dict[str, Any]]] = None
     image_url: Optional[str] = None
 

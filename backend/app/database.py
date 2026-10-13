@@ -45,6 +45,11 @@ async def init_db():
             await conn.execute(text("ALTER TABLE articles ADD COLUMN bilingual_content TEXT;"))
         except Exception:
             pass
+        # Data migration for forum topics: populate content from summary if content is empty
+        try:
+            await conn.execute(text("UPDATE articles SET content = summary WHERE (content IS NULL OR content = '') AND source_id LIKE 'linuxdo%' AND summary IS NOT NULL AND summary != '';"))
+        except Exception:
+            pass
 
 
 

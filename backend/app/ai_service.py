@@ -44,29 +44,48 @@ class AIService:
             logger.error(f"Error calling LLM ({model}): {e}")
         return None
 
-    async def summarize_article(self, title: str, text: str, model_override: Optional[str] = None) -> str:
+    async def summarize_article(
+        self,
+        title: str,
+        text: str,
+        model_override: Optional[str] = None,
+        discussion_posts: Optional[List[Dict[str, Any]]] = None
+    ) -> str:
         """
         Generates high-value Chinese summary with TL;DR, 3 bullet takeaways and target audience.
+        If discussion_posts are present (forum topic), incorporates community replies & consensus.
         """
         model = model_override or self.summary_model
-        content_snippet = text[:4000] if text else "无正文"
-        
-        prompt = f"""你是一个高效专业的数字图书馆阅读顾问。请为以下文章生成简洁、高信息密度的中文结构化摘要。
+        content_snippet = text[:3500] if text else "无正文"
 
-文章标题：{title}
-文章内容：
-{content_snippet}
+        disc_context = ""
+        if discussion_posts:
+            disc_lines = []
+            for p in discussion_posts[:12]:
+                author = p.get("author", "匿名")
+                num = p.get("post_number", 0)
+                body = (p.get("content") or "")[:250].strip()
+                if body:
+                    disc_lines.append(f"#{num} {author}: {body}")
+            if disc_lines:
+                disc_context = "\n\n【社区热议回帖与讨论汇总】:\n" + "\n".join(disc_lines)
+
+        prompt = f"""你是一个高效专业的数字图书馆阅读顾问与社区情报分析师。请为以下{'论坛讨论主题' if disc_context else '文章'}生成简洁、高信息密度的中文结构化摘要。
+
+标题：{title}
+主帖正文：
+{content_snippet}{disc_context}
 
 请按以下格式输出，避免冗余废话：
-💡 **一句话速览**：[用1句话概括核心事实或主旨，30字以内]
+💡 **一句话速览**：[用1句话概括核心事实、主旨或社区讨论焦点，35字以内]
 📌 **核心要点**：
-- [要点1：具体技术/事实/细节]
-- [要点2：具体技术/事实/细节]
-- [要点3：具体技术/事实/细节]
+- [要点1：楼主核心发现/分享/求助细节]
+- [要点2：{'社区关键方案/共识建议/争议分歧' if disc_context else '具体技术/事实/细节'}]
+- [要点3：{'避坑提醒/后续跟进/实用反馈' if disc_context else '具体技术/事实/细节'}]
 🎯 **适合读者**：[一句话说明谁最值得精读]
 """
         messages = [{"role": "user", "content": prompt}]
-        res = await self._call_llm(model, messages, temperature=0.2, max_tokens=600)
+        res = await self._call_llm(model, messages, temperature=0.2, max_tokens=700)
         return res or "摘要生成失败或超时，请参考原文。"
 
     async def ask_article(
