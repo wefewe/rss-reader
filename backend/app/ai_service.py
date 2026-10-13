@@ -23,25 +23,36 @@ class AIService:
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
 
-        payload = {
-            "model": model,
-            "messages": messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-        }
+        candidate_models = [model]
+        for fb in ["gemini-3.8-flash", "glm-5.2", "kimi-k3"]:
+            if fb not in candidate_models:
+                candidate_models.append(fb)
 
-        try:
-            async with httpx.AsyncClient(timeout=45.0) as client:
-                resp = await client.post(f"{self.base_url}/chat/completions", headers=headers, json=payload)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    choices = data.get("choices", [])
-                    if choices:
-                        return choices[0].get("message", {}).get("content", "").strip()
-                else:
-                    logger.warning(f"LLM call failed HTTP {resp.status_code}: {resp.text[:200]}")
-        except Exception as e:
-            logger.error(f"Error calling LLM ({model}): {e}")
+        for current_model in candidate_models:
+            payload = {
+                "model": current_model,
+                "messages": messages,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+            }
+            try:
+                async with httpx.AsyncClient(timeout=35.0) as client:
+                    resp = await client.post(f"{self.base_url}/chat/completions", headers=headers, json=payload)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        choices = data.get("choices", [])
+                        if choices:
+                            msg = choices[0].get("message", {})
+                            content = (msg.get("content") or "").strip()
+                            if not content and msg.get("reasoning_content"):
+                                content = msg.get("reasoning_content", "").strip()
+                            if content:
+                                return content
+                    else:
+                        logger.warning(f"LLM call {current_model} failed HTTP {resp.status_code}: {resp.text[:150]}")
+            except Exception as e:
+                logger.warning(f"LLM call {current_model} failed or timed out: {e}")
+
         return None
 
     async def summarize_article(
