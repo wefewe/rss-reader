@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 
 // Global cache of known hotlinking domains or failed URLs
 const hotlinkedDomains = /(?:bohaishibei\.com|\.qpic\.cn|\.sinaimg\.cn|\.zhimg\.com)/i;
@@ -35,20 +35,23 @@ export const SafeImage: React.FC<SafeImageProps> = ({
   onError,
   ...props
 }) => {
-  // Compute initial safe source
-  const safeInitialSrc = resolveSafeImageUrl(src);
-  const [currentSrc, setCurrentSrc] = useState<string | undefined>(safeInitialSrc);
+  // Synchronously derived state: reset immediately when `src` changes
+  // (render-phase adjustment) to avoid painting the previous article's image.
+  const initialSrc = resolveSafeImageUrl(src);
+  const [trackedSrc, setTrackedSrc] = useState<string | undefined>(src);
+  const [currentSrc, setCurrentSrc] = useState<string | undefined>(initialSrc);
   const [hasTriedProxy, setHasTriedProxy] = useState<boolean>(
-    Boolean(safeInitialSrc && safeInitialSrc.includes('/api/reader/proxy/image'))
+    Boolean(initialSrc && initialSrc.includes('/api/reader/proxy/image'))
   );
   const [isFailed, setIsFailed] = useState<boolean>(false);
 
-  useEffect(() => {
-    const initial = resolveSafeImageUrl(src);
-    setCurrentSrc(initial);
-    setHasTriedProxy(Boolean(initial && initial.includes('/api/reader/proxy/image')));
+  if (src !== trackedSrc) {
+    setTrackedSrc(src);
+    const resolved = resolveSafeImageUrl(src);
+    setCurrentSrc(resolved);
+    setHasTriedProxy(Boolean(resolved && resolved.includes('/api/reader/proxy/image')));
     setIsFailed(false);
-  }, [src]);
+  }
 
   const handleError = (e: React.SyntheticEvent<HTMLImageElement, Event>) => {
     if (!hasTriedProxy && src && src.startsWith('http') && !src.includes('/api/reader/proxy/image')) {
@@ -68,11 +71,11 @@ export const SafeImage: React.FC<SafeImageProps> = ({
 
   return (
     <img
+      key={currentSrc}
       src={currentSrc}
       alt={alt || ''}
       className={className}
       referrerPolicy="no-referrer"
-      decoding="async"
       loading="lazy"
       onError={handleError}
       onClick={() => onImageClick && onImageClick(currentSrc)}

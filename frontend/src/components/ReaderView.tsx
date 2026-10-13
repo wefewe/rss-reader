@@ -206,7 +206,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     localStorage.setItem('reader_bionic_reading', String(isBionicReading));
   }, [isBionicReading]);
 
-  // Reset scroll and progress indicators on article change
+  // Reset scroll, progress indicators and lightbox on article change
   useEffect(() => {
     if (scrollContainerRef.current) {
       scrollContainerRef.current.scrollTop = 0;
@@ -217,6 +217,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     if (progressTextRef.current) {
       progressTextRef.current.textContent = '0%';
     }
+    setActiveLightboxImg(null);
   }, [article?.id]);
 
   const handleScroll = () => {
@@ -247,6 +248,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     },
     img: ({ src, alt }: any) => (
       <SafeImage
+        key={src}
         src={src}
         alt={alt}
         className="cursor-zoom-in rounded-xl max-w-full my-4 border border-surfaceBorder hover:opacity-95 transition-opacity"
@@ -578,9 +580,12 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
         onScroll={handleScroll}
         className="flex-1 overflow-y-auto px-4 sm:px-10 py-8"
       >
-        <div className={`mx-auto space-y-6 transition-all duration-200 ${
-          isZenMode ? 'max-w-2xl' : 'max-w-3xl'
-        }`}>
+        <div
+          key={article.id}
+          className={`mx-auto space-y-6 transition-all duration-200 ${
+            isZenMode ? 'max-w-2xl' : 'max-w-3xl'
+          }`}
+        >
           {/* Article Header & Meta */}
           <div className="space-y-3 pb-6 border-b border-surfaceBorder">
             <div className="flex items-center gap-2 flex-wrap text-xs text-textMuted">
