@@ -2,7 +2,7 @@ import logging
 import datetime
 import asyncio
 import re
-from typing import Any
+from typing import Any, Optional, List, Dict
 import feedparser
 import httpx
 import trafilatura
