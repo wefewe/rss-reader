@@ -96,5 +96,13 @@ export interface ArticleHighlight {
   created_at: string;
 }
 
+export interface ForumDigestStatus {
+  status: string;
+  unconsumed_count: number;
+  total_staged: number;
+  latest_edition: string;
+  latest_published_at?: string;
+}
+
 export type ViewType = 'all' | 'unread' | 'starred' | 'featured' | 'highlights';
 export type ThemeMode = 'dark' | 'light' | 'sepia';

@@ -10,7 +10,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from apscheduler.triggers.cron import CronTrigger
 from .config import settings
 from .database import init_db
-from .feed_crawler import init_default_sources, refresh_all_feeds, run_daily_brief_job
+from .feed_crawler import init_default_sources, refresh_all_feeds, run_daily_brief_job, generate_forum_digest_job
 from .api import router as api_router, public_router
 
 logging.basicConfig(
@@ -40,8 +40,27 @@ async def lifespan(app: FastAPI):
         id="daily_brief_job",
         replace_existing=True,
     )
+    # LINUX DO 社区内参每日三刊制 (08:30 晨报 / 12:30 午报 / 21:00 晚报)
+    scheduler.add_job(
+        generate_forum_digest_job,
+        trigger=CronTrigger(hour=8, minute=30),
+        id="forum_digest_morning",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        generate_forum_digest_job,
+        trigger=CronTrigger(hour=12, minute=30),
+        id="forum_digest_noon",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        generate_forum_digest_job,
+        trigger=CronTrigger(hour=21, minute=0),
+        id="forum_digest_evening",
+        replace_existing=True,
+    )
     scheduler.start()
-    logger.info(f"Schedulers started. Feeds refresh every {settings.FEED_REFRESH_INTERVAL_MINUTES}m, Daily Brief at {settings.DAILY_BRIEF_CRON_HOUR}:{settings.DAILY_BRIEF_CRON_MINUTE:02d}.")
+    logger.info(f"Schedulers started. Feeds every {settings.FEED_REFRESH_INTERVAL_MINUTES}m, Daily Brief at {settings.DAILY_BRIEF_CRON_HOUR}:{settings.DAILY_BRIEF_CRON_MINUTE:02d}, LINUX DO Digest at 08:30, 12:30, 21:00.")
 
     # Run an initial background check non-blocking
     import asyncio

@@ -51,6 +51,7 @@ export const ArticleCard: React.FC<ArticleCardProps> = ({
 
   const isTitleDebuzzed = isDebuzz && article.clean_title && article.clean_title !== article.title;
   const displayTitle = isTitleDebuzzed ? article.clean_title : article.title;
+  const isForumDigest = article.source_id === 'linuxdo-digest';
 
   return (
     <div
@@ -58,7 +59,9 @@ export const ArticleCard: React.FC<ArticleCardProps> = ({
       onClick={onSelect}
       className={`group p-3.5 border-b border-surfaceBorder cursor-pointer transition-all relative select-none ${
         isSelected
-          ? 'bg-surfaceRaised border-l-2 border-l-accent'
+          ? isForumDigest
+            ? 'bg-surfaceRaised border-l-2 border-l-cyan-400'
+            : 'bg-surfaceRaised border-l-2 border-l-accent'
           : article.is_read
           ? 'bg-background/40 hover:bg-surface/60 opacity-80'
           : 'bg-background hover:bg-surface'
@@ -71,8 +74,12 @@ export const ArticleCard: React.FC<ArticleCardProps> = ({
             <span className="w-2 h-2 rounded-full bg-accent shrink-0 animate-pulse mr-0.5" />
           )}
 
-          {/* Value Tier Badge */}
-          {article.value_tier === 'featured' ? (
+          {/* Forum Digest Badge or Value Tier Badge */}
+          {isForumDigest ? (
+            <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.2 rounded font-semibold bg-cyan-500/20 text-cyan-400 border border-cyan-500/30">
+              🐧 社区期刊
+            </span>
+          ) : article.value_tier === 'featured' ? (
             <span className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.2 rounded font-medium bg-featuredBadge/20 text-featuredBadge border border-featuredBadge/30">
               <Flame size={10} />
               精选 {Math.round(article.rank_score * 100)}
@@ -84,7 +91,7 @@ export const ArticleCard: React.FC<ArticleCardProps> = ({
           ) : null}
 
           {/* Top Triage Signal Tag */}
-          {topSignal && article.value_tier !== 'hidden' && (
+          {!isForumDigest && topSignal && article.value_tier !== 'hidden' && (
             <span className={`text-[9px] px-1.5 py-0.2 rounded font-medium truncate max-w-[90px] ${
               topSignal.effect > 0
                 ? 'bg-accentGreen/10 text-accentGreen border border-accentGreen/20'

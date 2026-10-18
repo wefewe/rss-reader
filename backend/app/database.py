@@ -55,6 +55,12 @@ async def init_db():
             await conn.execute(text("UPDATE reader_preferences SET summary_model = 'gemini-3.8-flash' WHERE summary_model = 'deepseek-v4.1-flash';"))
         except Exception:
             pass
+        # Clean up legacy raw LINUX DO individual flood articles to clear the stream
+        try:
+            await conn.execute(text("DELETE FROM articles WHERE source_id IN ('linuxdo-gossip', 'linuxdo-welfare', 'linuxdo-resource');"))
+            await conn.execute(text("DELETE FROM feed_sources WHERE id IN ('linuxdo-gossip', 'linuxdo-welfare', 'linuxdo-resource');"))
+        except Exception:
+            pass
 
 
 

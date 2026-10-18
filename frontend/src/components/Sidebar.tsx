@@ -250,7 +250,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
                           }`}
                         >
                           <div className="flex items-center gap-1.5 truncate flex-1">
-                            <Rss size={12} className="shrink-0 opacity-60" />
+                            {s.id === 'linuxdo-digest' ? (
+                              <span className="text-xs shrink-0">🐧</span>
+                            ) : (
+                              <Rss size={12} className="shrink-0 opacity-60" />
+                            )}
                             <span className="truncate">{s.title}</span>
                           </div>
                           {s.unread_count > 0 && (

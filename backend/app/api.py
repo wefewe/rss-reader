@@ -14,7 +14,7 @@ from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, delete, desc, func, or_, cast, String
 from .database import get_db
-from .models import FeedSource, Article, ReaderPreference, DigestRecord, ArticleImage, ArticleHighlight
+from .models import FeedSource, Article, ReaderPreference, DigestRecord, ArticleImage, ArticleHighlight, ForumStagingTopic
 from .schemas import (
     ListReaderResponse,
     ArticleSchema,
@@ -42,8 +42,18 @@ from .schemas import (
     ListHighlightsInput,
     ExplainSelectionInput,
     ExplainSelectionResponse,
+    GenerateForumDigestInput,
+    ForumDigestStatusResponse,
 )
-from .feed_crawler import refresh_all_feeds, parse_date, clean_html, enrich_new_articles, run_daily_brief_job, debuzz_title
+from .feed_crawler import (
+    refresh_all_feeds,
+    parse_date,
+    clean_html,
+    enrich_new_articles,
+    run_daily_brief_job,
+    debuzz_title,
+    generate_forum_digest_job,
+)
 from .content_extractor import extract_fulltext_from_url
 from .ai_service import ai_service
 from .auth import require_auth, create_auth_token, verify_auth_token, TOKEN_VALIDITY_SECONDS
@@ -528,6 +538,64 @@ async def ingest_external_feed(data: IngestExternalFeedInput, db: AsyncSession =
     source_id = source.id
     source_title = source.title
     group_name = source.group_name
+
+    # ── LINUX DO Forum Exemption: Divert to ForumStagingTopic buffer (No article flooding) ──
+    if "linux.do" in feed_url or "linuxdo" in feed_url:
+        staged_count = 0
+        for item in data.entries:
+            url = item.url.strip()
+            if not url:
+                continue
+            pub_at = parse_date(item.published_at)
+            posts = item.discussion_posts or []
+            posts_cnt = len(posts) + 1
+
+            existing_stage = await db.get(ForumStagingTopic, url)
+            if not existing_stage:
+                stage_item = ForumStagingTopic(
+                    id=url,
+                    source_id=source_id,
+                    group_name=group_name,
+                    title=item.title.strip(),
+                    clean_title=debuzz_title(item.title.strip()),
+                    url=url,
+                    summary=item.summary or "",
+                    content=item.content or item.summary or "",
+                    image_url=item.image_url,
+                    discussion_posts=posts,
+                    posts_count=posts_cnt,
+                    published_at=pub_at,
+                    scraped_at=datetime.datetime.utcnow(),
+                    is_consumed=False
+                )
+                db.add(stage_item)
+                staged_count += 1
+            else:
+                existing_stage.title = item.title.strip()
+                existing_stage.clean_title = debuzz_title(item.title.strip())
+                existing_stage.summary = item.summary or existing_stage.summary
+                existing_stage.content = item.content or existing_stage.content
+                if posts:
+                    if len(posts) + 1 > existing_stage.posts_count:
+                        existing_stage.is_consumed = False
+                    existing_stage.discussion_posts = posts
+                    existing_stage.posts_count = len(posts) + 1
+                if item.image_url:
+                    existing_stage.image_url = item.image_url
+                existing_stage.scraped_at = datetime.datetime.utcnow()
+                staged_count += 1
+
+        # Retain last 7 days of staging topics, purge older
+        cutoff_7d = datetime.datetime.utcnow() - datetime.timedelta(days=7)
+        await db.execute(delete(ForumStagingTopic).where(ForumStagingTopic.scraped_at < cutoff_7d))
+        await db.commit()
+        return {
+            "status": "ok",
+            "staged_count": staged_count,
+            "mode": "staging_buffer",
+            "message": "Forum entries diverted to buffer successfully for periodic digest synthesis"
+        }
+
     current_batch_ids = set()
     newly_added = []
 
@@ -1139,6 +1207,41 @@ async def tts_audio_endpoint(
             "Cache-Control": "public, max-age=86400"
         }
     )
+
+# 25. Forum Digest Generation (即席/定时生成 LINUX DO 社区内参)
+@router.post("/forum/digest/generate")
+async def generate_forum_digest_endpoint(
+    body: Optional[GenerateForumDigestInput] = None,
+    db: AsyncSession = Depends(get_db)
+):
+    edition = body.edition if body else None
+    article = await generate_forum_digest_job(edition=edition)
+    if not article:
+        raise HTTPException(status_code=500, detail="生成社区内参失败，请检查模型连接或稍后重试")
+    return {"status": "ok", "article": ArticleSchema.model_validate(article)}
+
+# 26. Forum Buffer Status
+@router.get("/forum/digest/status", response_model=ForumDigestStatusResponse)
+async def get_forum_digest_status(db: AsyncSession = Depends(get_db)):
+    unconsumed = await db.scalar(
+        select(func.count(ForumStagingTopic.id)).where(ForumStagingTopic.is_consumed == False)
+    )
+    total_staged = await db.scalar(select(func.count(ForumStagingTopic.id)))
+    latest_digest = await db.execute(
+        select(Article)
+        .where(Article.source_id == "linuxdo-digest")
+        .order_by(desc(Article.published_at))
+        .limit(1)
+    )
+    latest_art = latest_digest.scalars().first()
+
+    return {
+        "status": "ok",
+        "unconsumed_count": unconsumed or 0,
+        "total_staged": total_staged or 0,
+        "latest_edition": latest_art.title if latest_art else "尚未生成",
+        "latest_published_at": latest_art.published_at.isoformat() if latest_art else None,
+    }
 
 @router.get("/health")
 async def health_check():

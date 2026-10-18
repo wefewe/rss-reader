@@ -178,6 +178,95 @@ class AIService:
         res = await self._call_llm(model, messages, temperature=0.2, max_tokens=250)
         return (res or "未能获取解析，请稍后重试。").strip()
 
+    async def generate_forum_digest_content(
+        self,
+        topics: List[Dict[str, Any]],
+        edition_name: str,
+        today_str: str,
+        model: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Synthesizes multiple forum topics and floor discussions into a single
+        magazine-style structured LINUX DO community digest issue with quick-jump anchors.
+        """
+        model = model or self.summary_model or "gemini-3.8-flash"
+
+        if not topics:
+            return {
+                "title": f"🐧 LINUX DO 社区热点内参 ({today_str} {edition_name})",
+                "summary": "💡 一句话速览：本时段暂无新增社区议题，论坛平稳运行中。",
+                "content": f"# 🐧 LINUX DO 社区热点内参 ({today_str} {edition_name})\n\n> 本期暂无新增聚合议题，稍后请留意下一期刊物更新。",
+            }
+
+        # Build candidate topics brief for LLM
+        items_text = []
+        for i, t in enumerate(topics[:30], 1):
+            disc_snippets = []
+            for p in (t.get("discussion_posts") or [])[:3]:
+                disc_snippets.append(f"@{p.get('author', '佬友')}: {p.get('content', '')[:100]}")
+            disc_str = (" | 回帖参考: " + " ; ".join(disc_snippets)) if disc_snippets else ""
+            items_text.append(
+                f"{i}. 《{t['title']}》\n"
+                f"   版块: {t.get('group_name', '综合')} | 原帖: {t['url']} | 互动: {t.get('posts_count', 1)} 楼\n"
+                f"   主帖梗概: {(t.get('content') or t.get('summary') or '')[:180]}{disc_str}"
+            )
+
+        context_payload = "\n\n".join(items_text)
+
+        prompt = f"""你是一位敏锐、专业且精通极客与开源社区文化的私人数字首席主编。
+请将以下 LINUX DO 社区在过去数小时内发生的精选议题与讨论回帖，编纂为一份高质量、高信息密度的《LINUX DO 社区热点内参 ({today_str} {edition_name})》。
+
+【扫描到的社区议题与回帖数据】：
+{context_payload}
+
+【排版规范与严格结构】：
+1. 顶部输出：
+   `## 📋 期刊导读`
+   [用 60~100 字宏观概括本期社区讨论焦点、情绪风向与最大热点]
+2. 按以下四个分类板块归纳（若某分类无对应内容可省略该分类，但至少包含 2~3 个分类）：
+   - `<span id="tech"></span>`
+     `### 🛠️ 【开源工具与硬核干货】`
+     (包含代码、GitHub、配置教程、自建服务等干货)
+   - `<span id="welfare"></span>`
+     `### 🎁 【在役福利与精选羊毛】`
+     (必须注明优惠实效、领取门槛与楼层实测避坑反馈)
+   - `<span id="debate"></span>`
+     `### 🔥 【热门争鸣与社区视角】`
+     (社区热烈讨论、行业见解、多方观点对比)
+   - `<span id="gossip"></span>`
+     `### 💬 【神帖花絮与生活杂谈】`
+     (社区幽默趣闻、高赞段子、文化热梗)
+3. 每个议题的条目格式必须严格为：
+   - **[{clean_title}]({url})** · `版块标签` (互动热度)
+     - 💡 **核心看点**：[用1~2句话提炼楼主发布的核心事实/资源/方案]
+     - 💬 **佬友实测/避坑**：[提炼楼层回帖的真实使用反馈、争议共识或避坑提醒]
+4. 结尾输出：
+   `## 💡 编者寄语`
+   [一句话技术洞察]
+5. 直接输出 Markdown 文本，严格保留 markdown 超链接格式 `[{title}]({url})`，绝不添加多余包裹前缀。"""
+
+        messages = [{"role": "user", "content": prompt}]
+        res = await self._call_llm(model, messages, temperature=0.2, max_tokens=2500)
+        
+        content = res or ""
+        if not content:
+            # Fallback simple template if LLM completely timed out
+            content = f"# 🐧 LINUX DO 社区热点内参 ({today_str} {edition_name})\n\n## 📋 议题摘录\n\n"
+            for t in topics[:15]:
+                content += f"- **[{t['title']}]({t['url']})** · `{t.get('group_name')}` ({t.get('posts_count', 1)}楼)\n"
+
+        # Generate 1-sentence TL;DR for article.summary
+        tldr_prompt = f"请为以下期刊生成 1 句高密度中文速览（35字以内，以 💡 **一句话速览**：开头）：\n{content[:1000]}"
+        tldr_res = await self._call_llm(model, [{"role": "user", "content": tldr_prompt}], temperature=0.1, max_tokens=150)
+        summary = (tldr_res or "💡 **一句话速览**：LINUX DO 社区热点与开源福利动态汇编。").strip()
+
+        return {
+            "title": f"🐧 LINUX DO 社区热点内参 ({today_str} {edition_name})",
+            "summary": summary,
+            "content": content,
+            "topic_count": len(topics)
+        }
+
     async def bilingual_translate(
         self,
         title: str,

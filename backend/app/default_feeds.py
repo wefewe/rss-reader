@@ -56,12 +56,12 @@ DEFAULT_FEED_SOURCES = [
         "description": "有趣段子、趣味图片与生活分享",
     },
     {
-        "id": "linuxdo-gossip",
-        "title": "搞七捻三-LINUX DO",
-        "site_url": "https://linux.do/c/gossip/11",
-        "feed_url": "https://linux.do/c/gossip/11.rss",
-        "group_name": "泛读闲聊",
-        "description": "LINUX DO 社区生活交流与闲聊杂谈",
+        "id": "linuxdo-digest",
+        "title": "LINUX DO 社区内参",
+        "site_url": "https://linux.do",
+        "feed_url": "https://linux.do/digest",
+        "group_name": "社区内参",
+        "description": "每日早/中/晚三刊：AI 深度聚合社区热点、干货开源与在役福利",
     },
     {
         "id": "fuliba",
@@ -70,14 +70,6 @@ DEFAULT_FEED_SOURCES = [
         "feed_url": "https://fuliba.net/feed",
         "group_name": "羊毛福利",
         "description": "分享好玩有趣及优惠羊毛信息",
-    },
-    {
-        "id": "linuxdo-welfare",
-        "title": "福利羊毛-LINUX DO",
-        "site_url": "https://linux.do/c/welfare/36",
-        "feed_url": "https://linux.do/c/welfare/36.rss",
-        "group_name": "羊毛福利",
-        "description": "LINUX DO 社区专属福利羊毛专区",
     },
     {
         "id": "ahhhhfs",
@@ -102,14 +94,6 @@ DEFAULT_FEED_SOURCES = [
         "feed_url": "https://51.ruyo.net/feed",
         "group_name": "羊毛福利",
         "description": "互联网羊毛与活动线报分享",
-    },
-    {
-        "id": "linuxdo-resource",
-        "title": "资源荟萃-LINUX DO",
-        "site_url": "https://linux.do/c/resource/14",
-        "feed_url": "https://linux.do/c/resource/14.rss",
-        "group_name": "资源分享",
-        "description": "LINUX DO 精品资源与开源工具分享",
     },
     {
         "id": "hackernews",

@@ -1,4 +1,4 @@
-import { Article, FeedSource, ReaderPreferences, DigestRecord, ViewType, ArticleHighlight } from './types';
+import { Article, FeedSource, ReaderPreferences, DigestRecord, ViewType, ArticleHighlight, ForumDigestStatus } from './types';
 
 const API_BASE = '/api/reader';
 const TOKEN_KEY = 'reader_auth_token';
@@ -333,6 +333,34 @@ export async function fetchBilingualTranslate(id: string): Promise<string> {
   const data = await res.json();
   return data.bilingual_content || '';
 }
+
+export async function generateForumDigest(edition?: string): Promise<Article> {
+  const res = await request(`${API_BASE}/forum/digest/generate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ edition: edition || null }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || '生成社区内参失败，请稍后重试');
+  }
+  const data = await res.json();
+  return data.article;
+}
+
+export async function getForumDigestStatus(): Promise<ForumDigestStatus> {
+  const res = await request(`${API_BASE}/forum/digest/status`);
+  if (!res.ok) {
+    return {
+      status: 'error',
+      unconsumed_count: 0,
+      total_staged: 0,
+      latest_edition: '未知',
+    };
+  }
+  return await res.json();
+}
+
 
 
 

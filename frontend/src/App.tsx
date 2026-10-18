@@ -20,6 +20,7 @@ import {
   summarizeArticle,
   checkAuth,
   deleteSource,
+  generateForumDigest,
 } from './api';
 
 export const App: React.FC = () => {
@@ -66,6 +67,7 @@ export const App: React.FC = () => {
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState<boolean>(false);
   const [isLoadingFullText, setIsLoadingFullText] = useState<boolean>(false);
   const [isLoadingSummary, setIsLoadingSummary] = useState<boolean>(false);
+  const [isGeneratingDigest, setIsGeneratingDigest] = useState<boolean>(false);
 
   // Theme class sync
   useEffect(() => {
@@ -263,6 +265,20 @@ export const App: React.FC = () => {
     }
   };
 
+  const handleGenerateForumDigest = async () => {
+    setIsGeneratingDigest(true);
+    try {
+      const newArticle = await generateForumDigest();
+      setArticles(prev => [newArticle, ...prev.filter(a => a.id !== newArticle.id)]);
+      setSelectedArticleId(newArticle.id);
+      loadData();
+    } catch (e: any) {
+      alert(e.message || '生成社区内参失败');
+    } finally {
+      setIsGeneratingDigest(false);
+    }
+  };
+
   // Keyboard navigation shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -426,6 +442,8 @@ export const App: React.FC = () => {
               onBackToList={() => setMobileView('list')}
               isZenMode={isZenMode}
               onToggleZenMode={() => setIsZenMode(prev => !prev)}
+              onGenerateDigest={handleGenerateForumDigest}
+              isGeneratingDigest={isGeneratingDigest}
             />
           </div>
         </>

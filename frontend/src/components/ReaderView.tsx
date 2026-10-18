@@ -50,6 +50,8 @@ interface ReaderViewProps {
   onBackToList?: () => void;
   isZenMode: boolean;
   onToggleZenMode: () => void;
+  onGenerateDigest?: () => Promise<void>;
+  isGeneratingDigest?: boolean;
 }
 
 export const ReaderView: React.FC<ReaderViewProps> = ({
@@ -64,6 +66,8 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
   onBackToList,
   isZenMode,
   onToggleZenMode,
+  onGenerateDigest,
+  isGeneratingDigest,
 }) => {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const progressBarRef = useRef<HTMLDivElement>(null);
@@ -237,6 +241,17 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     }
   };
 
+  const scrollToSection = (keyword: string) => {
+    if (!scrollContainerRef.current) return;
+    const headings = scrollContainerRef.current.querySelectorAll('h2, h3, h4, span[id]');
+    for (const el of Array.from(headings)) {
+      if (el.textContent?.includes(keyword) || (el as HTMLElement).id?.includes(keyword)) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        break;
+      }
+    }
+  };
+
   // Stable markdown components definition to prevent re-mounting during re-renders
   const markdownComponents = useMemo(() => ({
     p: ({ children }: any) => {
@@ -255,11 +270,27 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
         onImageClick={(validSrc) => setActiveLightboxImg(validSrc)}
       />
     ),
-    a: ({ href, children }: any) => (
-      <a href={href} target="_blank" rel="noopener noreferrer">
-        {children}
-      </a>
-    )
+    a: ({ href, children }: any) => {
+      const isForumLink = href && (href.includes('linux.do') || href.includes('/t/topic/'));
+      if (isForumLink) {
+        return (
+          <a
+            href={href}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 text-cyan-400 hover:text-cyan-300 bg-cyan-950/30 px-2 py-0.5 rounded border border-cyan-500/30 text-xs font-medium transition-colors no-underline hover:border-cyan-400"
+          >
+            <span>{children}</span>
+            <ExternalLink size={11} className="inline ml-0.5 opacity-80" />
+          </a>
+        );
+      }
+      return (
+        <a href={href} target="_blank" rel="noopener noreferrer">
+          {children}
+        </a>
+      );
+    }
   }), [isBionicReading]);
 
   const wordStats = useMemo(() => {
@@ -549,6 +580,19 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
             {isZenMode ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
           </button>
 
+          {/* On-demand Generate Latest Forum Digest Button */}
+          {article.source_id === 'linuxdo-digest' && onGenerateDigest && (
+            <button
+              onClick={onGenerateDigest}
+              disabled={isGeneratingDigest}
+              className="flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-md bg-cyan-500/15 text-cyan-400 border border-cyan-500/30 hover:bg-cyan-500/25 transition-colors font-medium shrink-0"
+              title="即席把过去数小时最新抓取到的社区议题汇总生成新一期快报"
+            >
+              <Sparkles size={13} className={isGeneratingDigest ? "animate-spin" : ""} />
+              <span className="hidden sm:inline">{isGeneratingDigest ? "编纂中..." : "即席生成新刊"}</span>
+            </button>
+          )}
+
           {/* Fetch Fulltext (Hide for forum topics as OP and floors are synced natively) */}
           {!effectiveContent && !isForumTopic && (
             <button
@@ -623,6 +667,56 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
               <span>已读 <span ref={progressTextRef}>0%</span></span>
             </div>
           </div>
+
+          {/* Magazine Hero Banner & In-Page Section Quick-Jump TOC */}
+          {article.source_id === 'linuxdo-digest' && (
+            <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-r from-cyan-950/40 via-surfaceRaised to-purple-950/30 border border-cyan-500/30 shadow-sm space-y-3 select-none">
+              <div className="flex items-center justify-between flex-wrap gap-2 text-xs">
+                <div className="flex items-center gap-2 text-cyan-400 font-semibold">
+                  <span className="text-base">🐧</span>
+                  <span>LINUX DO 社区热点期刊 · AI 深度萃取</span>
+                </div>
+                <span className="text-[11px] font-mono text-cyan-300/80 bg-cyan-950/60 px-2 py-0.5 rounded border border-cyan-500/30">
+                  3分钟纵览全天精粹
+                </span>
+              </div>
+
+              {/* In-Page Section Quick-Jump Anchor Pills */}
+              <div className="pt-2 border-t border-surfaceBorder/60 flex items-center gap-2 flex-wrap text-xs">
+                <span className="text-[11px] text-textMuted flex items-center gap-1 font-medium">
+                  <span>直达板块:</span>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => scrollToSection('开源')}
+                  className="px-2.5 py-1 rounded-lg bg-surface border border-surfaceBorder hover:border-cyan-400/60 hover:text-cyan-400 text-textPrimary transition-colors flex items-center gap-1 text-[11px] shadow-2xs"
+                >
+                  🛠️ <span>开源干货</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => scrollToSection('福利')}
+                  className="px-2.5 py-1 rounded-lg bg-surface border border-surfaceBorder hover:border-amber-400/60 hover:text-amber-400 text-textPrimary transition-colors flex items-center gap-1 text-[11px] shadow-2xs"
+                >
+                  🎁 <span>在役羊毛</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => scrollToSection('争鸣')}
+                  className="px-2.5 py-1 rounded-lg bg-surface border border-surfaceBorder hover:border-rose-400/60 hover:text-rose-400 text-textPrimary transition-colors flex items-center gap-1 text-[11px] shadow-2xs"
+                >
+                  🔥 <span>热门争鸣</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => scrollToSection('杂谈')}
+                  className="px-2.5 py-1 rounded-lg bg-surface border border-surfaceBorder hover:border-purple-400/60 hover:text-purple-400 text-textPrimary transition-colors flex items-center gap-1 text-[11px] shadow-2xs"
+                >
+                  💬 <span>神帖花絮</span>
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* AI Structured Summary Box (Prominently Pinned) */}
           <div className="p-4 sm:p-5 rounded-2xl bg-surfaceRaised/60 border border-featuredBadge/20 shadow-sm space-y-3">

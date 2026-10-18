@@ -8,9 +8,9 @@ import httpx
 import trafilatura
 from bs4 import BeautifulSoup
 from dateutil import parser as date_parser
-from sqlalchemy import select, delete, func, desc
+from sqlalchemy import select, delete, func, desc, update
 from .database import async_session
-from .models import FeedSource, Article, ReaderPreference, DigestRecord
+from .models import FeedSource, Article, ReaderPreference, DigestRecord, ForumStagingTopic
 from .default_feeds import DEFAULT_FEED_SOURCES
 from .ai_service import ai_service
 from .config import settings
@@ -436,3 +436,183 @@ async def run_daily_brief_job():
         }
         await ai_service.push_telegram_notification(tg_text, parse_mode="HTML", reply_markup=reply_markup)
         logger.info("09:00 Daily Briefing generated and stored.")
+
+async def generate_forum_digest_job(edition: Optional[str] = None) -> Optional[Article]:
+    """
+    Synthesizes staged LINUX DO topics into a single periodic issue (晨报/午报/晚报/即席).
+    Filters out noise/expired, calls LLM for structured sectional markdown, and publishes as 1 Article.
+    """
+    from zoneinfo import ZoneInfo
+    import time
+    tz = ZoneInfo(settings.TZ or "Asia/Shanghai")
+    now_local = datetime.datetime.now(tz)
+    today_str = now_local.strftime("%Y-%m-%d")
+    hour = now_local.hour
+
+    if not edition:
+        if hour < 11:
+            edition_name = "晨报版"
+            edition_code = "morning"
+            emoji = "☕"
+        elif hour < 17:
+            edition_name = "午报版"
+            edition_code = "noon"
+            emoji = "🍱"
+        else:
+            edition_name = "晚报版"
+            edition_code = "evening"
+            emoji = "🌙"
+    else:
+        edition_name = edition
+        edition_code = f"adhoc_{int(time.time())}"
+        emoji = "⚡"
+
+    logger.info(f"Generating LINUX DO Forum Digest ({today_str} {edition_name})...")
+
+    async with async_session() as session:
+        # 1. Fetch candidate topics from staging buffer
+        stmt = (
+            select(ForumStagingTopic)
+            .where(ForumStagingTopic.is_consumed == False)
+            .order_by(desc(ForumStagingTopic.posts_count), desc(ForumStagingTopic.scraped_at))
+            .limit(35)
+        )
+        res = await session.execute(stmt)
+        topics = res.scalars().all()
+
+        # If not enough unconsumed topics, look at last 16h to ensure full magazine substance
+        if len(topics) < 4:
+            cutoff = datetime.datetime.utcnow() - datetime.timedelta(hours=16)
+            stmt_fallback = (
+                select(ForumStagingTopic)
+                .where(ForumStagingTopic.scraped_at >= cutoff)
+                .order_by(desc(ForumStagingTopic.posts_count), desc(ForumStagingTopic.scraped_at))
+                .limit(35)
+            )
+            res_fb = await session.execute(stmt_fallback)
+            topics = res_fb.scalars().all()
+
+        # 2. Filter noise & obvious expired deals
+        valid_topics = []
+        consumed_ids = []
+        for t in topics:
+            consumed_ids.append(t.id)
+            title = t.title or ""
+            content_sample = (t.content or t.summary or "").strip()
+            # Skip if pure short water
+            if len(content_sample) < 20 and t.posts_count <= 1:
+                continue
+            # Skip expired
+            if any(k in title for k in ["已失效", "已领完", "活动结束", "优惠结束", "已下架"]):
+                continue
+            valid_topics.append({
+                "id": t.id,
+                "title": t.clean_title or t.title,
+                "url": t.url,
+                "group_name": t.group_name,
+                "content": t.content,
+                "summary": t.summary,
+                "discussion_posts": t.discussion_posts,
+                "posts_count": t.posts_count,
+            })
+
+        # 3. Call AI service for structured magazine issue
+        pref = await session.get(ReaderPreference, 1)
+        model = pref.summary_model if pref else "gemini-3.8-flash"
+
+        digest_data = await ai_service.generate_forum_digest_content(
+            topics=valid_topics,
+            edition_name=edition_name,
+            today_str=today_str,
+            model=model
+        )
+
+        # 4. Save as Article in articles table
+        source_id = "linuxdo-digest"
+        source_title = "LINUX DO 社区内参"
+        group_name = "社区内参"
+        issue_title = f"{emoji} LINUX DO 社区热点内参 ({today_str} {edition_name})"
+        article_url = f"https://linux.do/digest/{today_str}_{edition_code}"
+        article_id = f"{source_id}\n{article_url}"
+
+        article = Article(
+            id=article_id,
+            source_id=source_id,
+            source_title=source_title,
+            group_name=group_name,
+            title=issue_title,
+            clean_title=issue_title,
+            url=article_url,
+            summary=digest_data.get("summary", ""),
+            content=digest_data.get("content", ""),
+            value_tier="featured",
+            value_score=0.95,
+            rank_score=0.95,
+            published_at=datetime.datetime.utcnow(),
+            fetched_at=datetime.datetime.utcnow(),
+            is_read=False,
+            triage_signals=[
+                {"dimension": "quality", "effect": 0.5, "evidence": f"聚合 {len(valid_topics)} 篇精选议题", "label": "社区内参"}
+            ],
+            triage_reason=f"AI 精选期刊：涵盖全论坛过去数小时高频议题与楼层讨论 ({edition_name})"
+        )
+        session.add(article)
+
+        # 5. Mark consumed staging topics
+        if consumed_ids:
+            await session.execute(
+                update(ForumStagingTopic)
+                .where(ForumStagingTopic.id.in_(consumed_ids))
+                .values(is_consumed=True)
+            )
+
+        # 6. Ensure linuxdo-digest exists in feed_sources and update unread count
+        db_source = await session.get(FeedSource, source_id)
+        if not db_source:
+            db_source = FeedSource(
+                id=source_id,
+                title=source_title,
+                site_url="https://linux.do",
+                feed_url="https://linux.do/digest",
+                group_name=group_name,
+                description="每日早/中/晚三刊：AI 深度聚合社区热点、干货开源与在役福利",
+                status="active"
+            )
+            session.add(db_source)
+
+        await session.commit()
+        await session.refresh(article)
+
+        # Update counter
+        tot = await session.scalar(select(func.count(Article.id)).where(Article.source_id == source_id))
+        unr = await session.scalar(select(func.count(Article.id)).where(Article.source_id == source_id, Article.is_read == False))
+        db_source.article_count = tot or 0
+        db_source.unread_count = unr or 0
+        db_source.last_checked_at = datetime.datetime.utcnow()
+        db_source.last_success_at = datetime.datetime.utcnow()
+        await session.commit()
+
+        # 7. Push Telegram notification for the new magazine issue
+        import html as py_html
+        clean_title = py_html.escape(issue_title)
+        clean_summary = ai_service.markdown_to_telegram_html(digest_data.get("summary", ""))
+
+        tg_text = f"""{clean_title}
+📅 <code>{today_str}</code> · <b>全景速报 · 扫描 {len(valid_topics)} 个热点议题</b>
+━━━━━━━━━━━━━━━━━━━━━━
+<blockquote expandable>
+{clean_summary}
+</blockquote>"""
+        reader_url = settings.PUBLIC_URL or "https://reader.cwsub.indevs.in"
+        reply_markup = {
+            "inline_keyboard": [
+                [
+                    {"text": "📖 阅读本期完整内参", "url": reader_url},
+                    {"text": "🌐 访问论坛", "url": "https://linux.do"}
+                ]
+            ]
+        }
+        await ai_service.push_telegram_notification(tg_text, parse_mode="HTML", reply_markup=reply_markup)
+        logger.info(f"LINUX DO Forum Digest ({today_str} {edition_name}) published successfully.")
+        return article
+

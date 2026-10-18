@@ -114,3 +114,22 @@ class ArticleHighlight(Base):
     color = Column(String(20), default="yellow") # yellow, green, red, purple
     created_at = Column(DateTime, default=datetime.datetime.utcnow, index=True)
 
+class ForumStagingTopic(Base):
+    __tablename__ = "forum_staging_topics"
+
+    id = Column(String(500), primary_key=True)
+    source_id = Column(String(100), nullable=False, index=True)
+    group_name = Column(String(100), nullable=False)
+    title = Column(String(500), nullable=False)
+    clean_title = Column(String(500), nullable=True)
+    url = Column(Text, nullable=False)
+    summary = Column(Text, nullable=True)
+    content = Column(Text, nullable=True)
+    image_url = Column(Text, nullable=True)
+    discussion_posts = Column(JSON, default=list)
+    posts_count = Column(Integer, default=0)
+    published_at = Column(DateTime, nullable=False)
+    scraped_at = Column(DateTime, default=datetime.datetime.utcnow, index=True)
+    is_consumed = Column(Boolean, default=False, index=True)
+
+

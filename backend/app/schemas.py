@@ -210,3 +210,14 @@ class ExplainSelectionResponse(BaseModel):
     status: str = "ok"
     explanation: str
 
+class GenerateForumDigestInput(BaseModel):
+    edition: Optional[str] = None
+
+class ForumDigestStatusResponse(BaseModel):
+    status: str = "ok"
+    unconsumed_count: int = 0
+    total_staged: int = 0
+    latest_edition: Optional[str] = None
+    latest_published_at: Optional[str] = None
+
+
