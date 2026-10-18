@@ -237,13 +237,13 @@ class AIService:
      `### 💬 【神帖花絮与生活杂谈】`
      (社区幽默趣闻、高赞段子、文化热梗)
 3. 每个议题的条目格式必须严格为：
-   - **[{clean_title}]({url})** · `版块标签` (互动热度)
+   - **[{{clean_title}}]({{url}})** · `版块标签` (互动热度)
      - 💡 **核心看点**：[用1~2句话提炼楼主发布的核心事实/资源/方案]
      - 💬 **佬友实测/避坑**：[提炼楼层回帖的真实使用反馈、争议共识或避坑提醒]
 4. 结尾输出：
    `## 💡 编者寄语`
    [一句话技术洞察]
-5. 直接输出 Markdown 文本，严格保留 markdown 超链接格式 `[{title}]({url})`，绝不添加多余包裹前缀。"""
+5. 直接输出 Markdown 文本，严格保留 markdown 超链接格式 `[{{title}}]({{url}})`，绝不添加多余包裹前缀。"""
 
         messages = [{"role": "user", "content": prompt}]
         res = await self._call_llm(model, messages, temperature=0.2, max_tokens=2500)
