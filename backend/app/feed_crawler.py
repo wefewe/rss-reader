@@ -527,7 +527,7 @@ async def generate_forum_digest_job(edition: Optional[str] = None) -> Optional[A
             model=model
         )
 
-        # 4. Save as Article in articles table
+        # 4. Save as Article in articles table (Upsert)
         source_id = "linuxdo-digest"
         source_title = "LINUX DO 社区内参"
         group_name = "社区内参"
@@ -535,28 +535,43 @@ async def generate_forum_digest_job(edition: Optional[str] = None) -> Optional[A
         article_url = f"https://linux.do/digest/{today_str}_{edition_code}"
         article_id = f"{source_id}\n{article_url}"
 
-        article = Article(
-            id=article_id,
-            source_id=source_id,
-            source_title=source_title,
-            group_name=group_name,
-            title=issue_title,
-            clean_title=issue_title,
-            url=article_url,
-            summary=digest_data.get("summary", ""),
-            content=digest_data.get("content", ""),
-            value_tier="featured",
-            value_score=0.95,
-            rank_score=0.95,
-            published_at=datetime.datetime.utcnow(),
-            fetched_at=datetime.datetime.utcnow(),
-            is_read=False,
-            triage_signals=[
+        existing_article = await session.get(Article, article_id)
+        if existing_article:
+            existing_article.title = issue_title
+            existing_article.clean_title = issue_title
+            existing_article.summary = digest_data.get("summary", "")
+            existing_article.content = digest_data.get("content", "")
+            existing_article.published_at = datetime.datetime.utcnow()
+            existing_article.fetched_at = datetime.datetime.utcnow()
+            existing_article.is_read = False
+            existing_article.triage_signals = [
                 {"dimension": "quality", "effect": 0.5, "evidence": f"聚合 {len(valid_topics)} 篇精选议题", "label": "社区内参"}
-            ],
-            triage_reason=f"AI 精选期刊：涵盖全论坛过去数小时高频议题与楼层讨论 ({edition_name})"
-        )
-        session.add(article)
+            ]
+            existing_article.triage_reason = f"AI 精选期刊：涵盖全论坛过去数小时高频议题与楼层讨论 ({edition_name})"
+            article = existing_article
+        else:
+            article = Article(
+                id=article_id,
+                source_id=source_id,
+                source_title=source_title,
+                group_name=group_name,
+                title=issue_title,
+                clean_title=issue_title,
+                url=article_url,
+                summary=digest_data.get("summary", ""),
+                content=digest_data.get("content", ""),
+                value_tier="featured",
+                value_score=0.95,
+                rank_score=0.95,
+                published_at=datetime.datetime.utcnow(),
+                fetched_at=datetime.datetime.utcnow(),
+                is_read=False,
+                triage_signals=[
+                    {"dimension": "quality", "effect": 0.5, "evidence": f"聚合 {len(valid_topics)} 篇精选议题", "label": "社区内参"}
+                ],
+                triage_reason=f"AI 精选期刊：涵盖全论坛过去数小时高频议题与楼层讨论 ({edition_name})"
+            )
+            session.add(article)
 
         # 5. Mark consumed staging topics
         if consumed_ids:
