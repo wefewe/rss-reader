@@ -15,7 +15,7 @@ import {
   ArrowRight
 } from 'lucide-react';
 import { ArticleHighlight, Article } from '../types';
-import { listHighlights, updateHighlight, deleteHighlight } from '../api';
+import { listHighlights, updateHighlight, deleteHighlight, downloadHighlightsMarkdown } from '../api';
 
 interface HighlightsHubViewProps {
   onSelectArticleById?: (articleId: string) => void;
@@ -118,42 +118,47 @@ export const HighlightsHubView: React.FC<HighlightsHubViewProps> = ({
     setTimeout(() => setCopiedId(null), 2000);
   };
 
-  // Export all to Markdown
-  const handleExportMarkdown = () => {
+  // Export all to Markdown (后端端点 + 前端降级容灾)
+  const handleExportMarkdown = async () => {
     if (highlights.length === 0) return;
-    const nowStr = new Date().toISOString().slice(0, 10);
-    let md = `# 💡 我的数字图书馆划线与知识萃取库\n\n导出时间：${nowStr}\n总计收录：${highlights.length} 条灵感划线\n\n---\n\n`;
+    try {
+      await downloadHighlightsMarkdown();
+    } catch (e) {
+      console.warn('Backend markdown export failed, using local fallback:', e);
+      const nowStr = new Date().toISOString().slice(0, 10);
+      let md = `# 💡 我的数字图书馆划线与知识萃取库\n\n导出时间：${nowStr}\n总计收录：${highlights.length} 条灵感划线\n\n---\n\n`;
 
-    // Group highlights by article
-    const grouped: Record<string, ArticleHighlight[]> = {};
-    for (const h of highlights) {
-      const key = h.article_title || '未分类文章';
-      if (!grouped[key]) grouped[key] = [];
-      grouped[key].push(h);
-    }
-
-    for (const [title, list] of Object.entries(grouped)) {
-      md += `## 《${title}》\n\n`;
-      for (const item of list) {
-        const colorLabel = COLOR_MAP[item.color as keyof typeof COLOR_MAP]?.label || '重点';
-        md += `> **[${colorLabel}]** ${item.text}\n\n`;
-        if (item.note) {
-          md += `✍️ **思考批注**：${item.note}\n\n`;
-        }
-        md += `<small>记录时间：${item.created_at.slice(0, 16).replace('T', ' ')}</small>\n\n`;
+      // Group highlights by article
+      const grouped: Record<string, ArticleHighlight[]> = {};
+      for (const h of highlights) {
+        const key = h.article_title || '未分类文章';
+        if (!grouped[key]) grouped[key] = [];
+        grouped[key].push(h);
       }
-      md += `---\n\n`;
-    }
 
-    const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `my_highlights_archive_${nowStr}.md`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+      for (const [title, list] of Object.entries(grouped)) {
+        md += `## 《${title}》\n\n`;
+        for (const item of list) {
+          const colorLabel = COLOR_MAP[item.color as keyof typeof COLOR_MAP]?.label || '重点';
+          md += `> **[${colorLabel}]** ${item.text}\n\n`;
+          if (item.note) {
+            md += `✍️ **思考批注**：${item.note}\n\n`;
+          }
+          md += `<small>记录时间：${item.created_at.slice(0, 16).replace('T', ' ')}</small>\n\n`;
+        }
+        md += `---\n\n`;
+      }
+
+      const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `my_highlights_archive_${nowStr}.md`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
   };
 
   return (

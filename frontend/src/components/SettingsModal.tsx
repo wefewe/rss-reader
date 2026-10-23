@@ -16,10 +16,13 @@ import {
   Rss,
   ExternalLink,
   AlertCircle,
-  Clock
+  Clock,
+  RefreshCw,
+  Pause,
+  Play
 } from 'lucide-react';
 import { ReaderPreferences, FeedSource } from '../types';
-import { updateReaderPreferences, logout, downloadOpmlExport, importOpmlFile } from '../api';
+import { updateReaderPreferences, logout, downloadOpmlExport, importOpmlFile, refreshSingleSource, toggleSourceStatus } from '../api';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -28,6 +31,8 @@ interface SettingsModalProps {
   onPreferencesUpdated: (newPref: ReaderPreferences) => void;
   sources?: FeedSource[];
   onDeleteSource?: (id: string) => Promise<void>;
+  onOpenAddSource?: () => void;
+  onSourceUpdated?: (updatedSource: FeedSource) => void;
 }
 
 type TabType = 'preferences' | 'ai' | 'sources';
@@ -39,6 +44,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onPreferencesUpdated,
   sources = [],
   onDeleteSource,
+  onOpenAddSource,
+  onSourceUpdated,
 }) => {
   const [activeTab, setActiveTab] = useState<TabType>('preferences');
   const [form, setForm] = useState<ReaderPreferences>(preferences);
@@ -48,6 +55,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [isImportingOpml, setIsImportingOpml] = useState(false);
   const [importResult, setImportResult] = useState<{ message: string; success: boolean } | null>(null);
   const [deletingSourceId, setDeletingSourceId] = useState<string | null>(null);
+  const [refreshingSourceId, setRefreshingSourceId] = useState<string | null>(null);
+  const [togglingSourceId, setTogglingSourceId] = useState<string | null>(null);
   const opmlFileInputRef = useRef<HTMLInputElement>(null);
 
   React.useEffect(() => {
@@ -128,6 +137,30 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       await onDeleteSource(source.id);
     } finally {
       setDeletingSourceId(null);
+    }
+  };
+
+  const handleRefreshSourceClick = async (source: FeedSource) => {
+    setRefreshingSourceId(source.id);
+    try {
+      const updated = await refreshSingleSource(source.id);
+      if (onSourceUpdated) onSourceUpdated(updated);
+    } catch (err: any) {
+      alert(err.message || '刷新订阅源失败');
+    } finally {
+      setRefreshingSourceId(null);
+    }
+  };
+
+  const handleToggleSourceStatusClick = async (source: FeedSource) => {
+    setTogglingSourceId(source.id);
+    try {
+      const res = await toggleSourceStatus(source.id);
+      if (onSourceUpdated) onSourceUpdated(res.source);
+    } catch (err: any) {
+      alert(err.message || '切换状态失败');
+    } finally {
+      setTogglingSourceId(null);
     }
   };
 
@@ -461,30 +494,57 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     <Rss size={13} className="text-accent" />
                     全量订阅源运行监控 ({sources.length})
                   </h3>
-                  <span className="text-[11px] text-textMuted">按分组与健康度实时展示</span>
+                  <div className="flex items-center gap-2">
+                    {onOpenAddSource && (
+                      <button
+                        type="button"
+                        onClick={onOpenAddSource}
+                        className="text-[11px] px-2 py-0.5 rounded-md bg-accent/15 text-accent hover:bg-accent/25 font-medium transition-colors flex items-center gap-1"
+                      >
+                        <Plus size={11} />
+                        添加订阅
+                      </button>
+                    )}
+                    <span className="text-[11px] text-textMuted">实时状态与单源运维</span>
+                  </div>
                 </div>
 
                 <div className="divide-y divide-surfaceBorder/60 border border-surfaceBorder rounded-xl bg-surfaceRaised/40 overflow-hidden">
                   {sources.map((s) => {
-                    const isDisabled = s.status === 'disabled';
-                    const isError = s.status === 'error' || (!isDisabled && !!s.last_error);
+                    const isAutoDisabled = s.status === 'disabled';
+                    const isUserPaused = s.status === 'user_paused';
+                    const isError = s.status === 'error' || (!isAutoDisabled && !isUserPaused && !!s.last_error);
                     const isDeleting = deletingSourceId === s.id;
+                    const isRefreshing = refreshingSourceId === s.id;
+                    const isToggling = togglingSourceId === s.id;
+
+                    let statusDotColor = 'bg-accentGreen';
+                    if (isAutoDisabled) statusDotColor = 'bg-accentRed ring-2 ring-accentRed/40';
+                    else if (isUserPaused) statusDotColor = 'bg-amber-400 ring-2 ring-amber-400/40';
+                    else if (isError) statusDotColor = 'bg-accentRed animate-pulse';
+
                     return (
                       <div key={s.id} className="p-3 hover:bg-surfaceRaised/80 transition-colors flex items-center justify-between gap-3">
                         <div className="min-w-0 flex-1 space-y-1">
                           <div className="flex items-center gap-2 flex-wrap">
-                            <span className={`w-2 h-2 rounded-full shrink-0 ${isDisabled ? 'bg-accentRed ring-2 ring-accentRed/40' : isError ? 'bg-accentRed animate-pulse' : 'bg-accentGreen'}`} />
+                            <span className={`w-2 h-2 rounded-full shrink-0 ${statusDotColor}`} />
                             <span className="font-semibold text-textPrimary truncate">{s.title}</span>
                             <span className="text-[10px] px-1.5 py-0.5 rounded bg-surface border border-surfaceBorder text-textMuted">
                               {s.group_name}
                             </span>
-                            {isDisabled && (
+                            {isAutoDisabled && (
                               <span className="text-[10px] px-1.5 py-0.2 rounded bg-accentRed/30 text-accentRed border border-accentRed/50 flex items-center gap-1 font-semibold">
                                 <AlertCircle size={10} />
-                                已停用熔断 ({s.consecutive_failures || 10}次连续失败)
+                                连续失败熔断停用 ({s.consecutive_failures || 10}次)
                               </span>
                             )}
-                            {isError && !isDisabled && (
+                            {isUserPaused && (
+                              <span className="text-[10px] px-1.5 py-0.2 rounded bg-amber-400/20 text-amber-300 border border-amber-400/30 flex items-center gap-1 font-medium">
+                                <Pause size={10} />
+                                用户手动暂停
+                              </span>
+                            )}
+                            {isError && !isAutoDisabled && !isUserPaused && (
                               <span className="text-[10px] px-1.5 py-0.2 rounded bg-accentRed/20 text-accentRed border border-accentRed/30 flex items-center gap-1">
                                 <AlertCircle size={10} />
                                 抓取异常
@@ -514,8 +574,40 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           )}
                         </div>
 
-                        {/* Actions */}
+                        {/* Actions (单源刷新、启用/停用、站点跳转、删除) */}
                         <div className="flex items-center gap-1 shrink-0">
+                          {/* 单源刷新 */}
+                          <button
+                            type="button"
+                            onClick={() => handleRefreshSourceClick(s)}
+                            disabled={isRefreshing || isAutoDisabled || isUserPaused}
+                            className="p-1.5 rounded-lg text-textMuted hover:text-accent hover:bg-surface transition-colors disabled:opacity-30"
+                            title={isUserPaused ? "已暂停源请先恢复后再刷新" : "单源立即刷新抓取"}
+                          >
+                            <RefreshCw size={13} className={isRefreshing ? "animate-spin text-accent" : ""} />
+                          </button>
+
+                          {/* 暂停 / 恢复 */}
+                          <button
+                            type="button"
+                            onClick={() => handleToggleSourceStatusClick(s)}
+                            disabled={isToggling}
+                            className={`p-1.5 rounded-lg transition-colors disabled:opacity-40 ${
+                              isUserPaused || isAutoDisabled
+                                ? 'text-amber-400 hover:bg-amber-400/10'
+                                : 'text-textMuted hover:text-amber-300 hover:bg-surface'
+                            }`}
+                            title={isUserPaused || isAutoDisabled ? "恢复定时抓取" : "暂停定时抓取"}
+                          >
+                            {isToggling ? (
+                              <Loader2 size={13} className="animate-spin" />
+                            ) : isUserPaused || isAutoDisabled ? (
+                              <Play size={13} />
+                            ) : (
+                              <Pause size={13} />
+                            )}
+                          </button>
+
                           {s.site_url && (
                             <a
                               href={s.site_url}
@@ -527,6 +619,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                               <ExternalLink size={13} />
                             </a>
                           )}
+
                           {onDeleteSource && (
                             <button
                               type="button"

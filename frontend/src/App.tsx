@@ -7,6 +7,7 @@ import { SettingsModal } from './components/SettingsModal';
 import { LoginScreen } from './components/LoginScreen';
 import { ShortcutHelpModal } from './components/ShortcutHelpModal';
 import { HighlightsHubView } from './components/HighlightsHubView';
+import { AddSourceModal } from './components/AddSourceModal';
 import { Article, FeedSource, ReaderPreferences, ViewType, ThemeMode } from './types';
 import { 
   listReader, 
@@ -20,6 +21,7 @@ import {
   summarizeArticle,
   checkAuth,
   deleteSource,
+  updateReaderPreferences,
   generateForumDigest,
 } from './api';
 
@@ -53,6 +55,9 @@ export const App: React.FC = () => {
   const [currentGroup, setCurrentGroup] = useState<string>('全部');
   const [currentSourceId, setCurrentSourceId] = useState<string>('');
   const [currentView, setCurrentView] = useState<ViewType>('all');
+  const [currentSort, setCurrentSort] = useState<'rank' | 'time'>(() => {
+    return (localStorage.getItem('reader_sort') as 'rank' | 'time') || 'rank';
+  });
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [debouncedSearchQuery, setDebouncedSearchQuery] = useState<string>('');
   const [totalArticles, setTotalArticles] = useState<number>(0);
@@ -78,6 +83,7 @@ export const App: React.FC = () => {
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
   const [isBriefModalOpen, setIsBriefModalOpen] = useState<boolean>(false);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState<boolean>(false);
+  const [isAddSourceModalOpen, setIsAddSourceModalOpen] = useState<boolean>(false);
   const [isLoadingFullText, setIsLoadingFullText] = useState<boolean>(false);
   const [isLoadingSummary, setIsLoadingSummary] = useState<boolean>(false);
   const [isGeneratingDigest, setIsGeneratingDigest] = useState<boolean>(false);
@@ -127,6 +133,7 @@ export const App: React.FC = () => {
         source_id: currentSourceId || undefined,
         view: currentView,
         search: debouncedSearchQuery || undefined,
+        sort: currentSort,
         offset: 0,
         limit: 50,
       }, controller.signal);
@@ -134,7 +141,12 @@ export const App: React.FC = () => {
       setArticles(data.articles);
       setTotalArticles(data.total);
       setSources(data.sources);
-      if (data.preferences) setPreferences(data.preferences);
+      if (data.preferences) {
+        setPreferences(data.preferences);
+        if (data.preferences.default_sort && !localStorage.getItem('reader_sort')) {
+          setCurrentSort(data.preferences.default_sort as 'rank' | 'time');
+        }
+      }
       if (data.tier_counts) {
         setTierCounts(data.tier_counts);
       } else {
@@ -154,7 +166,7 @@ export const App: React.FC = () => {
         console.error('Failed to load reader data:', e);
       }
     }
-  }, [isAuthenticated, currentGroup, currentSourceId, currentView, debouncedSearchQuery, selectedArticleId]);
+  }, [isAuthenticated, currentGroup, currentSourceId, currentView, debouncedSearchQuery, currentSort, selectedArticleId]);
 
   // Load More Articles (incremental pagination)
   const handleLoadMore = useCallback(async () => {
@@ -166,6 +178,7 @@ export const App: React.FC = () => {
         source_id: currentSourceId || undefined,
         view: currentView,
         search: debouncedSearchQuery || undefined,
+        sort: currentSort,
         offset: articles.length,
         limit: 50,
       });
@@ -182,7 +195,7 @@ export const App: React.FC = () => {
     } finally {
       setIsLoadingMore(false);
     }
-  }, [isLoadingMore, articles.length, totalArticles, currentGroup, currentSourceId, currentView, debouncedSearchQuery]);
+  }, [isLoadingMore, articles.length, totalArticles, currentGroup, currentSourceId, currentView, debouncedSearchQuery, currentSort]);
 
   useEffect(() => {
     if (isAuthenticated) {
@@ -246,6 +259,36 @@ export const App: React.FC = () => {
       console.error(e);
     }
   }, [articles]);
+
+  const handleSortChange = async (newSort: 'rank' | 'time') => {
+    setCurrentSort(newSort);
+    localStorage.setItem('reader_sort', newSort);
+    try {
+      await updateReaderPreferences({ default_sort: newSort });
+      setPreferences(prev => ({ ...prev, default_sort: newSort }));
+    } catch (e) {
+      console.error('Failed to persist default_sort preference:', e);
+    }
+  };
+
+  const handleSourceAdded = (newSource: FeedSource, message: string) => {
+    setSources(prev => {
+      const idx = prev.findIndex(s => s.id === newSource.id);
+      if (idx >= 0) {
+        const copy = [...prev];
+        copy[idx] = newSource;
+        return copy;
+      }
+      return [...prev, newSource];
+    });
+    alert(message || '订阅源添加成功！');
+    loadData();
+  };
+
+  const handleSourceUpdated = (updatedSource: FeedSource) => {
+    setSources(prev => prev.map(s => s.id === updatedSource.id ? updatedSource : s));
+    loadData();
+  };
 
   const handleFeedback = useCallback(async (articleId: string, feedback: 'like' | 'dislike') => {
     const art = articles.find(a => a.id === articleId);
@@ -457,6 +500,7 @@ export const App: React.FC = () => {
           onRefresh={handleRefresh}
           onOpenBrief={() => setIsBriefModalOpen(true)}
           onOpenSettings={() => setIsSettingsModalOpen(true)}
+          onOpenAddSource={() => setIsAddSourceModalOpen(true)}
           onMarkAllRead={handleMarkAllRead}
           isRefreshing={isRefreshing}
           totalUnread={totalUnread}
@@ -488,6 +532,8 @@ export const App: React.FC = () => {
               filterTier={filterTier}
               onFilterTierChange={setFilterTier}
               tierCounts={tierCounts}
+              currentSort={currentSort}
+              onSortChange={handleSortChange}
               onBackToSidebar={() => setMobileView('sidebar')}
               totalArticles={totalArticles}
               hasMore={articles.length < totalArticles}
@@ -538,6 +584,15 @@ export const App: React.FC = () => {
         onPreferencesUpdated={setPreferences}
         sources={sources}
         onDeleteSource={handleDeleteSource}
+        onOpenAddSource={() => setIsAddSourceModalOpen(true)}
+        onSourceUpdated={handleSourceUpdated}
+      />
+
+      <AddSourceModal
+        isOpen={isAddSourceModalOpen}
+        onClose={() => setIsAddSourceModalOpen(false)}
+        sources={sources}
+        onSourceAdded={handleSourceAdded}
       />
 
       <ShortcutHelpModal

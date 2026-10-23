@@ -72,6 +72,7 @@ export async function listReader(params: {
   source_id?: string;
   view?: ViewType;
   search?: string;
+  sort?: 'rank' | 'time';
   offset?: number;
   limit?: number;
 }, signal?: AbortSignal): Promise<{
@@ -87,6 +88,7 @@ export async function listReader(params: {
   if (params.source_id) query.set('source_id', params.source_id);
   if (params.view) query.set('view', params.view);
   if (params.search) query.set('search', params.search);
+  if (params.sort) query.set('sort', params.sort);
   if (typeof params.offset === 'number') query.set('offset', String(params.offset));
   if (typeof params.limit === 'number') query.set('limit', String(params.limit));
 
@@ -258,6 +260,75 @@ export async function importOpmlFile(file: File): Promise<{
     throw new Error(err.detail || '导入 OPML 失败');
   }
   return await res.json();
+}
+
+// 订阅源高级管理 (第四批补齐)
+export async function createSource(payload: {
+  feed_url: string;
+  group_name?: string;
+  title?: string;
+}): Promise<{
+  status: string;
+  is_existing: boolean;
+  source: FeedSource;
+  message: string;
+}> {
+  const res = await request(`${API_BASE}/source/create`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || '添加订阅源失败');
+  }
+  return await res.json();
+}
+
+export async function refreshSingleSource(id: string): Promise<FeedSource> {
+  const res = await request(`${API_BASE}/source/refresh`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || '刷新订阅源失败');
+  }
+  const data = await res.json();
+  return data.source;
+}
+
+export async function toggleSourceStatus(id: string, status?: string): Promise<{
+  source: FeedSource;
+  message: string;
+}> {
+  const res = await request(`${API_BASE}/source/toggle_status`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id, status }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || '调整订阅源状态失败');
+  }
+  return await res.json();
+}
+
+export async function downloadHighlightsMarkdown(): Promise<void> {
+  const res = await request(`${API_BASE}/highlights/export`);
+  if (!res.ok) {
+    throw new Error('导出划线 Markdown 失败');
+  }
+  const blob = await res.blob();
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `highlights_export_${new Date().toISOString().slice(0, 10)}.md`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  window.URL.revokeObjectURL(url);
 }
 
 // Highlights & Annotations (Readwise 工作流)

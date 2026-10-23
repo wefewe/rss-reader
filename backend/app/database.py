@@ -35,6 +35,11 @@ async def init_db():
             await conn.execute(text("PRAGMA journal_mode=WAL;"))
             await conn.execute(text("PRAGMA synchronous=NORMAL;"))
         await conn.run_sync(Base.metadata.create_all)
+        # Migration: ensure default_sort column exists on reader_preferences
+        try:
+            await conn.execute(text("ALTER TABLE reader_preferences ADD COLUMN default_sort VARCHAR(20) DEFAULT 'rank';"))
+        except Exception:
+            pass
         # Migration: ensure muted_keywords column exists on reader_preferences
         try:
             await conn.execute(text("ALTER TABLE reader_preferences ADD COLUMN muted_keywords JSON DEFAULT '[]';"))

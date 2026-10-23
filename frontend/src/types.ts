@@ -69,6 +69,7 @@ export interface ReaderPreferences {
   pure_rule_mode: boolean;
   summary_model: string;
   brief_model: string;
+  default_sort?: string;
   muted_keywords?: string[];
 }
 

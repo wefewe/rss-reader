@@ -84,6 +84,7 @@ class ReaderPreference(Base):
     pure_rule_mode = Column(Boolean, default=False)
     summary_model = Column(String(100), default="gemini-3.8-flash")
     brief_model = Column(String(100), default="gpt-5.6-terra")
+    default_sort = Column(String(20), default="rank")
     muted_keywords = Column(JSON, default=list)
 
 class DigestRecord(Base):

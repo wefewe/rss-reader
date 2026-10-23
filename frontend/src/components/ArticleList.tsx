@@ -17,6 +17,8 @@ interface ArticleListProps {
   filterTier: string;
   onFilterTierChange: (tier: string) => void;
   tierCounts?: { normal: number; featured: number; hidden: number };
+  currentSort?: 'rank' | 'time';
+  onSortChange?: (sort: 'rank' | 'time') => void;
   onBackToSidebar?: () => void;
   totalArticles?: number;
   hasMore?: boolean;
@@ -37,6 +39,8 @@ export const ArticleList: React.FC<ArticleListProps> = ({
   filterTier,
   onFilterTierChange,
   tierCounts,
+  currentSort = 'rank',
+  onSortChange,
   onBackToSidebar,
   totalArticles,
   hasMore,
@@ -199,6 +203,34 @@ export const ArticleList: React.FC<ArticleListProps> = ({
             <Layers size={13} />
             <span className="text-[11px] hidden sm:inline">聚合</span>
           </button>
+
+          {/* Sort Switcher (rank vs time) */}
+          {onSortChange && (
+            <div className="flex items-center bg-surface p-0.5 rounded-lg border border-surfaceBorder shrink-0">
+              <button
+                onClick={() => onSortChange('rank')}
+                className={`px-1.5 py-1 rounded text-[11px] font-medium transition-colors ${
+                  currentSort === 'rank'
+                    ? 'bg-surfaceRaised text-accent font-semibold'
+                    : 'text-textMuted hover:text-textPrimary'
+                }`}
+                title="智能排序：结合 AI 价值、时效衰减与偏好加权"
+              >
+                智能
+              </button>
+              <button
+                onClick={() => onSortChange('time')}
+                className={`px-1.5 py-1 rounded text-[11px] font-medium transition-colors ${
+                  currentSort === 'time'
+                    ? 'bg-surfaceRaised text-accent font-semibold'
+                    : 'text-textMuted hover:text-textPrimary'
+                }`}
+                title="时间排序：严格按发布时间倒序排列"
+              >
+                最新
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Tier switcher pills */}

@@ -120,6 +120,7 @@ class ReaderPreferencesSchema(BaseModel):
     pure_rule_mode: bool = False
     summary_model: str = "gemini-3.8-flash"
     brief_model: str = "gpt-5.6-terra"
+    default_sort: str = "rank"
     muted_keywords: List[str] = []
 
     class Config:
@@ -173,6 +174,24 @@ class MarkAllReadInput(BaseModel):
 
 class DeleteSourceInput(BaseModel):
     id: str
+
+class CreateSourceInput(BaseModel):
+    feed_url: str
+    group_name: Optional[str] = "自定义订阅"
+    title: Optional[str] = None
+
+class CreateSourceResponse(BaseModel):
+    status: str = "ok"
+    is_existing: bool = False
+    source: FeedSourceSchema
+    message: str
+
+class RefreshSourceInput(BaseModel):
+    id: str
+
+class ToggleSourceStatusInput(BaseModel):
+    id: str
+    status: Optional[str] = None # 'active' | 'user_paused'
 
 class UpdateReaderPreferencesInput(BaseModel):
     preferences: Dict[str, Any]

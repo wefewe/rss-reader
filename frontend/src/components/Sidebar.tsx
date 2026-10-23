@@ -34,6 +34,7 @@ interface SidebarProps {
   onOpenBrief: () => void;
   onOpenSettings: () => void;
   onMarkAllRead: () => void;
+  onOpenAddSource?: () => void;
   isRefreshing: boolean;
   totalUnread: number;
 }
@@ -52,6 +53,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onOpenBrief,
   onOpenSettings,
   onMarkAllRead,
+  onOpenAddSource,
   isRefreshing,
   totalUnread,
 }) => {
@@ -185,14 +187,25 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <span className="text-[11px] font-semibold text-textMuted uppercase tracking-wider">
             订阅源分组 ({Object.keys(groupedSources).length})
           </span>
-          <button
-            onClick={onMarkAllRead}
-            title="全部标为已读"
-            className="text-[11px] text-textMuted hover:text-accent flex items-center gap-1 transition-colors"
-          >
-            <CheckCheck size={12} />
-            全部标读
-          </button>
+          <div className="flex items-center gap-2">
+            {onOpenAddSource && (
+              <button
+                onClick={onOpenAddSource}
+                title="添加新订阅源"
+                className="text-[11px] text-accent hover:text-accent/80 flex items-center gap-0.5 font-medium transition-colors"
+              >
+                + 添加
+              </button>
+            )}
+            <button
+              onClick={onMarkAllRead}
+              title="全部标为已读"
+              className="text-[11px] text-textMuted hover:text-accent flex items-center gap-1 transition-colors"
+            >
+              <CheckCheck size={12} />
+              全部标读
+            </button>
+          </div>
         </div>
 
         <div className="space-y-3">

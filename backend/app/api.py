@@ -38,6 +38,10 @@ from .schemas import (
     ForwardTelegramInput,
     ImportOpmlResponse,
     DeleteSourceInput,
+    CreateSourceInput,
+    CreateSourceResponse,
+    RefreshSourceInput,
+    ToggleSourceStatusInput,
     ArticleHighlightSchema,
     CreateHighlightInput,
     UpdateHighlightInput,
@@ -59,6 +63,8 @@ from .feed_crawler import (
     normalize_url,
     cleanup_forum_staging_topics,
     cleanup_digest_records,
+    discover_and_validate_feed,
+    fetch_single_feed,
 )
 from .content_extractor import extract_fulltext_from_url
 from .ai_service import ai_service
@@ -366,10 +372,27 @@ async def list_reader(
     source_id: Optional[str] = Query(None),
     view: Optional[str] = Query("all"), # all, unread, starred, featured
     search: Optional[str] = Query(None),
+    sort: Optional[str] = Query("rank"), # rank or time
     offset: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=500),
     db: AsyncSession = Depends(get_db)
 ):
+    # Normalize query params if called directly as a function
+    if not isinstance(group_name, str):
+        group_name = None
+    if not isinstance(source_id, str):
+        source_id = None
+    if not isinstance(view, str):
+        view = "all"
+    if not isinstance(search, str):
+        search = None
+    if not isinstance(sort, str):
+        sort = "rank"
+    if not isinstance(offset, int):
+        offset = 0
+    if not isinstance(limit, int):
+        limit = 50
+
     # Get preferences
     pref = await db.get(ReaderPreference, 1)
     if not pref:
@@ -464,8 +487,12 @@ async def list_reader(
     if filters:
         stmt = stmt.where(and_(*filters))
 
-    # Order by rank_score DESC, published_at DESC with offset & limit
-    stmt = stmt.order_by(desc(Article.rank_score), desc(Article.published_at)).offset(offset).limit(limit)
+    # Order by sort mode with offset & limit
+    is_time_sort = (sort == "time")
+    if is_time_sort:
+        stmt = stmt.order_by(desc(Article.published_at)).offset(offset).limit(limit)
+    else:
+        stmt = stmt.order_by(desc(Article.rank_score), desc(Article.published_at)).offset(offset).limit(limit)
     res = await db.execute(stmt)
     articles = res.scalars().all()
 
@@ -621,8 +648,11 @@ async def list_reader(
         schema.triage_signals = signals
         article_schemas.append(schema)
 
-    # Re-sort by effective rank_score DESC, published_at DESC
-    article_schemas.sort(key=lambda x: (x.rank_score, x.published_at), reverse=True)
+    # Re-sort by chosen sort strategy
+    if is_time_sort:
+        article_schemas.sort(key=lambda x: x.published_at, reverse=True)
+    else:
+        article_schemas.sort(key=lambda x: (x.rank_score, x.published_at), reverse=True)
 
     # Query sources
     src_res = await db.execute(select(FeedSource))
@@ -1250,6 +1280,145 @@ async def delete_source(body: DeleteSourceInput, db: AsyncSession = Depends(get_
 
     return {"status": "ok", "message": f"已成功删除订阅源: {source.title}"}
 
+# 18.1 create-source (手动添加订阅源，支持 feed URL 或 站点 URL 自动发现，首抓，防重)
+@router.post("/source/create", response_model=CreateSourceResponse)
+async def create_source(body: CreateSourceInput, db: AsyncSession = Depends(get_db)):
+    raw_feed_url = body.feed_url.strip()
+    if not raw_feed_url:
+        raise HTTPException(status_code=400, detail="订阅源地址不能为空")
+
+    # 1. Fast preliminary check: if exact URL already exists in database, return existing source immediately
+    pre_stmt = select(FeedSource).where(
+        or_(
+            FeedSource.feed_url == raw_feed_url,
+            FeedSource.feed_url == raw_feed_url.rstrip("/"),
+            FeedSource.site_url == raw_feed_url,
+            FeedSource.site_url == raw_feed_url.rstrip("/")
+        )
+    )
+    pre_res = await db.execute(pre_stmt)
+    pre_existing = pre_res.scalars().first()
+    if pre_existing:
+        return {
+            "status": "ok",
+            "is_existing": True,
+            "source": FeedSourceSchema.model_validate(pre_existing),
+            "message": f"订阅源已存在: {pre_existing.title}"
+        }
+
+    try:
+        discovered = await discover_and_validate_feed(raw_feed_url)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"无法解析该订阅源: {str(e)}")
+
+    final_feed_url = discovered["feed_url"]
+    site_url = discovered.get("site_url") or raw_feed_url
+    discovered_title = discovered.get("title") or "新订阅源"
+    description = discovered.get("description") or ""
+
+    # 2. Post-discovery check: check if discovered feed_url already exists
+    stmt = select(FeedSource).where(
+        or_(
+            FeedSource.feed_url == final_feed_url,
+            FeedSource.feed_url == final_feed_url.rstrip("/")
+        )
+    )
+    existing_res = await db.execute(stmt)
+    existing_source = existing_res.scalars().first()
+    if existing_source:
+        return {
+            "status": "ok",
+            "is_existing": True,
+            "source": FeedSourceSchema.model_validate(existing_source),
+            "message": f"订阅源已存在: {existing_source.title}"
+        }
+
+    # Generate slug & source ID
+    title = (body.title.strip() if body.title and body.title.strip() else discovered_title).strip()
+    group_name = (body.group_name.strip() if body.group_name and body.group_name.strip() else "自定义订阅").strip()
+    slug = re.sub(r'[^a-zA-Z0-9_\-]', '', title.lower()[:24]) or "feed"
+    unique_suffix = uuid.uuid4().hex[:6]
+    source_id = f"custom-{slug}-{unique_suffix}"
+
+    new_source = FeedSource(
+        id=source_id,
+        title=title,
+        site_url=site_url,
+        feed_url=final_feed_url,
+        description=description,
+        group_name=group_name,
+        status="active",
+        consecutive_failures=0
+    )
+    db.add(new_source)
+    await db.commit()
+    await db.refresh(new_source)
+
+    # Trigger immediate initial fetch
+    try:
+        await fetch_single_feed(new_source)
+        await db.refresh(new_source)
+    except Exception as e:
+        logger.warning(f"Initial fetch for new source {title} had warning: {e}")
+
+    return {
+        "status": "ok",
+        "is_existing": False,
+        "source": FeedSourceSchema.model_validate(new_source),
+        "message": f"订阅源「{new_source.title}」添加成功，已完成首次内容抓取与清洗！"
+    }
+
+# 18.2 单源刷新 (Refresh Single Source)
+@router.post("/source/refresh")
+async def refresh_single_source(body: RefreshSourceInput, db: AsyncSession = Depends(get_db)):
+    source = await db.get(FeedSource, body.id)
+    if not source:
+        raise HTTPException(status_code=404, detail="订阅源不存在")
+
+    await fetch_single_feed(source)
+    await db.refresh(source)
+    return {
+        "status": "ok",
+        "message": f"订阅源「{source.title}」已刷新完成",
+        "source": FeedSourceSchema.model_validate(source)
+    }
+
+# 18.3 单源启用/停用 (Toggle / Set Source Status)
+@router.post("/source/toggle_status")
+async def toggle_source_status(body: ToggleSourceStatusInput, db: AsyncSession = Depends(get_db)):
+    source = await db.get(FeedSource, body.id)
+    if not source:
+        raise HTTPException(status_code=404, detail="订阅源不存在")
+
+    if body.status:
+        target_status = body.status
+    else:
+        # Toggle semantics
+        if source.status in ("user_paused", "disabled"):
+            target_status = "active"
+        else:
+            target_status = "user_paused"
+
+    if target_status == "active":
+        source.status = "active"
+        source.consecutive_failures = 0
+        source.last_error = None
+        msg = f"订阅源「{source.title}」已恢复抓取"
+    elif target_status == "user_paused":
+        source.status = "user_paused"
+        msg = f"订阅源「{source.title}」已被用户暂停抓取"
+    else:
+        source.status = target_status
+        msg = f"订阅源「{source.title}」状态已调整为 {target_status}"
+
+    await db.commit()
+    await db.refresh(source)
+    return {
+        "status": "ok",
+        "message": msg,
+        "source": FeedSourceSchema.model_validate(source)
+    }
+
 # 19. Highlights & Annotations (Readwise 工作流)
 @router.post("/highlights", response_model=ArticleHighlightSchema)
 async def create_highlight(body: CreateHighlightInput, db: AsyncSession = Depends(get_db)):
@@ -1306,6 +1475,78 @@ async def delete_highlight(body: DeleteHighlightInput, db: AsyncSession = Depend
     await db.delete(hl)
     await db.commit()
     return {"status": "ok", "message": "划线与批注已移除"}
+
+# 19.1 Highlights Markdown Export (按文章分组：标题、原文链接、划线内容、备注)
+@router.get("/highlights/export")
+async def export_highlights_markdown(db: AsyncSession = Depends(get_db)):
+    stmt = select(ArticleHighlight).order_by(desc(ArticleHighlight.created_at))
+    res = await db.execute(stmt)
+    highlights = res.scalars().all()
+
+    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    date_slug = datetime.datetime.now().strftime("%Y%m%d")
+
+    color_labels = {
+        "yellow": "核心重点",
+        "green": "启发灵感",
+        "red": "警惕避坑",
+        "purple": "优质工具",
+    }
+
+    # Group by article_id / title
+    grouped: Dict[str, Dict[str, Any]] = {}
+    for h in highlights:
+        key = h.article_id or h.article_title or "unknown"
+        if key not in grouped:
+            grouped[key] = {
+                "title": h.article_title or "未命名文章",
+                "url": h.article_url or "",
+                "items": []
+            }
+        grouped[key]["items"].append(h)
+
+    md_lines = [
+        "# 💡 灵感划线与知识萃取库导出",
+        "",
+        f"- **导出时间**：{now_str}",
+        f"- **总计收录**：{len(highlights)} 条划线与灵感",
+        f"- **文章篇数**：{len(grouped)} 篇",
+        "",
+        "---",
+        ""
+    ]
+
+    for item in grouped.values():
+        title = item["title"]
+        url = item["url"]
+        md_lines.append(f"## 《{title}》")
+        if url:
+            md_lines.append(f"🔗 **原文链接**：[{url}]({url})")
+        md_lines.append("")
+
+        for hl in item["items"]:
+            tag = color_labels.get(hl.color, "重点")
+            md_lines.append(f"> **[{tag}]** {hl.text}")
+            md_lines.append("")
+            if hl.note:
+                md_lines.append(f"✍️ **思考批注**：{hl.note}")
+                md_lines.append("")
+            time_str = hl.created_at.strftime("%Y-%m-%d %H:%M:%S") if hl.created_at else ""
+            if time_str:
+                md_lines.append(f"<small>记录时间：{time_str}</small>")
+                md_lines.append("")
+
+        md_lines.append("---")
+        md_lines.append("")
+
+    markdown_text = "\n".join(md_lines)
+    return Response(
+        content=markdown_text.encode("utf-8"),
+        media_type="text/markdown; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="highlights_export_{date_slug}.md"'
+        }
+    )
 
 # 20. Contextual AI on Selection
 @router.post("/explain_selection", response_model=ExplainSelectionResponse)

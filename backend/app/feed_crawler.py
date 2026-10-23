@@ -601,8 +601,8 @@ async def refresh_all_feeds():
     """Refreshes all active feeds asynchronously with concurrency semaphore and reused AsyncClient."""
     logger.info("Starting background refresh of all feeds...")
     async with async_session() as session:
-        # Exclude feeds that have been auto-disabled (consecutive_failures >= 10)
-        stmt = select(FeedSource).where(FeedSource.status != "disabled")
+        # Exclude feeds that have been auto-disabled (consecutive_failures >= 10) or user-paused
+        stmt = select(FeedSource).where(FeedSource.status.notin_(["disabled", "user_paused"]))
         res = await session.execute(stmt)
         sources = res.scalars().all()
 
@@ -886,4 +886,85 @@ async def generate_forum_digest_job(edition: Optional[str] = None) -> Optional[A
         await ai_service.push_telegram_notification(tg_text, parse_mode="HTML", reply_markup=reply_markup)
         logger.info(f"LINUX DO Forum Digest ({today_str} {edition_name}) published successfully.")
         return article
+
+async def discover_and_validate_feed(raw_url: str) -> Dict[str, Any]:
+    """
+    Validates a feed URL or discovers feeds from a website HTML page (link rel=alternate).
+    Returns a dict with: feed_url, site_url, title, description.
+    Raises ValueError if cannot reach or find valid feed.
+    """
+    url = raw_url.strip()
+    if not url:
+        raise ValueError("订阅地址不能为空")
+
+    if not url.startswith(("http://", "https://")):
+        url = "https://" + url
+
+    async with httpx.AsyncClient(headers=HEADERS, timeout=18.0, follow_redirects=True, verify=False) as client:
+        try:
+            resp = await client.get(url)
+        except Exception as e:
+            raise ValueError(f"无法连接到该地址 ({url}): {e}")
+
+        if resp.status_code >= 400:
+            raise ValueError(f"访问请求失败: HTTP {resp.status_code} {resp.reason_phrase}")
+
+        content_bytes = resp.content
+        final_url = str(resp.url)
+
+        # 1. Try parsing directly as RSS/Atom
+        parsed = await asyncio.to_thread(feedparser.parse, content_bytes)
+        has_entries = len(parsed.entries) > 0
+        feed_title = parsed.feed.get("title", "").strip() if hasattr(parsed, "feed") else ""
+
+        if has_entries or (feed_title and getattr(parsed, "version", None)):
+            site_link = parsed.feed.get("link", "").strip() or final_url
+            return {
+                "feed_url": final_url,
+                "site_url": site_link,
+                "title": feed_title or urllib.parse.urlsplit(final_url).netloc,
+                "description": parsed.feed.get("description", "") or "",
+            }
+
+        # 2. Not directly a feed, try HTML page link rel="alternate" feed discovery
+        html_text = resp.text
+        soup = BeautifulSoup(html_text, "html.parser")
+        candidate_feeds = []
+
+        for link in soup.find_all("link", rel=lambda r: r and "alternate" in r.lower()):
+            l_type = (link.get("type") or "").lower()
+            href = (link.get("href") or "").strip()
+            if not href:
+                continue
+            if any(t in l_type for t in ["application/rss+xml", "application/atom+xml", "application/xml", "text/xml", "application/json"]):
+                abs_href = urllib.parse.urljoin(final_url, href)
+                candidate_feeds.append((abs_href, link.get("title") or ""))
+
+        # Fallback common feed paths if no link tag
+        if not candidate_feeds:
+            parsed_origin = urllib.parse.urlsplit(final_url)
+            origin_base = f"{parsed_origin.scheme}://{parsed_origin.netloc}"
+            for p in ["/feed", "/rss", "/rss.xml", "/atom.xml", "/feed.xml", "/index.xml"]:
+                candidate_feeds.append((urllib.parse.urljoin(origin_base, p), ""))
+
+        for cand_url, cand_title in candidate_feeds:
+            try:
+                cand_resp = await client.get(cand_url, timeout=12.0)
+                if cand_resp.status_code == 200:
+                    cand_parsed = await asyncio.to_thread(feedparser.parse, cand_resp.content)
+                    if len(cand_parsed.entries) > 0 or (cand_parsed.feed.get("title") and getattr(cand_parsed, "version", None)):
+                        detected_title = cand_title or cand_parsed.feed.get("title", "").strip()
+                        if not detected_title and soup.title and soup.title.string:
+                            detected_title = soup.title.string.strip()
+                        return {
+                            "feed_url": str(cand_resp.url),
+                            "site_url": cand_parsed.feed.get("link", "").strip() or final_url,
+                            "title": detected_title or urllib.parse.urlsplit(final_url).netloc,
+                            "description": cand_parsed.feed.get("description", "") or "",
+                        }
+            except Exception:
+                continue
+
+        raise ValueError("未能从该 URL 解析出有效的 RSS/Atom 内容，且未能在网页中发现订阅链接")
+
 
