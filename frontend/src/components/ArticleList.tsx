@@ -102,6 +102,11 @@ export const ArticleList: React.FC<ArticleListProps> = ({
         const b = filteredArticles[j];
         if (groupedIds.has(b.id)) continue;
 
+        // WO-20261023-09: 排除 linuxdo-digest 源内部互相聚合折叠（每期独立成卡，跨源聚合保持原行为）
+        if (a.source_id === 'linuxdo-digest' && b.source_id === 'linuxdo-digest') {
+          continue;
+        }
+
         const kwB = getKeywords(b.clean_title || b.title);
         let overlapCount = 0;
         let hasLongTerm = false;

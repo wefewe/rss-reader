@@ -442,32 +442,61 @@ async def list_reader(
         filters.append(Article.value_tier == "featured")
 
     search_filter = None
-    used_fts = False
-    matched_rowids = []
     if search and search.strip():
         search_kw = search.strip()
-        fts_query = _clean_fts5_query(search_kw)
-        if fts_query:
-            try:
-                fts_sql = text("SELECT rowid FROM articles_fts WHERE articles_fts MATCH :query")
-                fts_res = await db.execute(fts_sql, {"query": fts_query})
-                matched_rowids = [r[0] for r in fts_res.fetchall()]
-                is_short_cjk = len(search_kw) <= 2 and any('\u4e00' <= ch <= '\u9fa5' for ch in search_kw)
-                if matched_rowids or not is_short_cjk:
-                    search_filter = literal_column("articles.rowid").in_(matched_rowids)
-                    used_fts = True
-            except Exception as e:
-                logger.warning(f"FTS5 search failed, falling back to ILIKE: {e}")
-                used_fts = False
+        cleaned = re.sub(r'[^\w\s\u4e00-\u9fa5]', ' ', search_kw).strip()
+        tokens = [t for t in cleaned.split() if t]
+        if tokens:
+            trigram_tokens = [t for t in tokens if len(t) >= 3]
+            short_tokens = [t for t in tokens if len(t) < 3]
 
-        if not used_fts:
-            kw = f"%{search_kw}%"
-            search_filter = or_(
-                Article.title.ilike(kw),
-                Article.summary.ilike(kw),
-                Article.content.ilike(kw),
-                cast(Article.discussion_posts, String).ilike(kw)
-            )
+            matched_rowids = None
+            if trigram_tokens:
+                fts_query = " AND ".join(f'"{t}"' for t in trigram_tokens)
+                try:
+                    fts_sql = text("SELECT rowid FROM articles_fts WHERE articles_fts MATCH :query")
+                    fts_res = await db.execute(fts_sql, {"query": fts_query})
+                    matched_rowids = [r[0] for r in fts_res.fetchall()]
+                except Exception as e:
+                    logger.warning(f"FTS5 trigram search failed, falling back to LIKE: {e}")
+                    matched_rowids = None
+
+            conds = []
+            if matched_rowids is not None:
+                if not matched_rowids:
+                    # Trigram tokens yielded no matches -> overall query has 0 results
+                    conds.append(literal_column("articles.rowid").in_([]))
+                else:
+                    conds.append(literal_column("articles.rowid").in_(matched_rowids))
+            elif not trigram_tokens:
+                pass  # All tokens are short (<3 chars), handled by short_tokens LIKE fallback
+            else:
+                # FTS exception, fall back to LIKE for trigram tokens
+                for tt in trigram_tokens:
+                    kw = f"%{tt}%"
+                    conds.append(
+                        or_(
+                            Article.title.ilike(kw),
+                            Article.summary.ilike(kw),
+                            Article.content.ilike(kw),
+                            cast(Article.discussion_posts, String).ilike(kw)
+                        )
+                    )
+
+            # For short tokens (< 3 chars, e.g. "优惠", "云"), enforce substring match via LIKE
+            for st in short_tokens:
+                kw = f"%{st}%"
+                conds.append(
+                    or_(
+                        Article.title.ilike(kw),
+                        Article.summary.ilike(kw),
+                        Article.content.ilike(kw),
+                        cast(Article.discussion_posts, String).ilike(kw)
+                    )
+                )
+
+            if conds:
+                search_filter = and_(*conds) if len(conds) > 1 else conds[0]
 
     if search_filter is not None:
         filters.append(search_filter)
@@ -847,6 +876,27 @@ async def ingest_external_feed(data: IngestExternalFeedInput, db: AsyncSession =
             ).limit(1)
             res_match = await db.execute(stmt_match)
             existing = res_match.scalars().first()
+
+        # WO-20261023-09: 同 source_id 下 clean_title / debuzz_title 归一化兜底去重
+        if not existing:
+            target_norm_title = debuzz_title(item.title.strip()).strip()
+            if target_norm_title:
+                for candidate_new in newly_added:
+                    cand_norm = debuzz_title(candidate_new.clean_title or candidate_new.title or "").strip()
+                    if candidate_new.source_id == source_id and cand_norm == target_norm_title:
+                        existing = candidate_new
+                        break
+                if not existing:
+                    stmt_title = select(Article).where(
+                        Article.source_id == source_id,
+                        or_(
+                            Article.clean_title == target_norm_title,
+                            Article.title == target_norm_title,
+                            Article.title == item.title.strip()
+                        )
+                    ).limit(1)
+                    res_title = await db.execute(stmt_title)
+                    existing = res_title.scalars().first()
 
         pub_at = parse_date(item.published_at)
 

@@ -379,6 +379,29 @@ async def fetch_single_feed(
                     res_match = await session.execute(stmt_match)
                     existing_article = res_match.scalars().first()
 
+                # WO-20261023-09: 同 source_id 下 clean_title / debuzz_title 归一化兜底去重
+                if not existing_article:
+                    target_norm_title = debuzz_title(item.get("clean_title") or item["title"]).strip()
+                    if target_norm_title:
+                        # 1. Check in-memory articles of current batch
+                        for candidate_new in new_articles:
+                            cand_norm = debuzz_title(candidate_new.clean_title or candidate_new.title or "").strip()
+                            if candidate_new.source_id == source_id and cand_norm == target_norm_title:
+                                existing_article = candidate_new
+                                break
+                        # 2. Check DB for matching title/clean_title
+                        if not existing_article:
+                            stmt_title = select(Article).where(
+                                Article.source_id == source_id,
+                                or_(
+                                    Article.clean_title == target_norm_title,
+                                    Article.title == target_norm_title,
+                                    Article.title == item["title"].strip()
+                                )
+                            ).limit(1)
+                            res_title = await session.execute(stmt_title)
+                            existing_article = res_title.scalars().first()
+
                 if not existing_article:
                     current_batch_ids.add(article_id)
                     art = Article(
@@ -816,6 +839,14 @@ async def generate_forum_digest_job(edition: Optional[str] = None) -> Optional[A
         article_id = f"{source_id}\n{article_url}"
 
         existing_article = await session.get(Article, article_id)
+        if not existing_article:
+            stmt_title = select(Article).where(
+                Article.source_id == source_id,
+                or_(Article.clean_title == issue_title, Article.title == issue_title)
+            ).limit(1)
+            res_title = await session.execute(stmt_title)
+            existing_article = res_title.scalars().first()
+
         if existing_article:
             existing_article.title = issue_title
             existing_article.clean_title = issue_title
