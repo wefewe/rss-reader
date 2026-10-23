@@ -83,6 +83,21 @@ async def init_db():
             await conn.execute(text("ALTER TABLE feed_sources ADD COLUMN consecutive_failures INTEGER DEFAULT 0;"))
         except Exception:
             pass
+        # Migration: ensure source_kind column exists on feed_sources
+        try:
+            await conn.execute(text("ALTER TABLE feed_sources ADD COLUMN source_kind VARCHAR(50) DEFAULT 'rss';"))
+        except Exception:
+            pass
+        # Idempotent backfill: mark external feeds (linux.do/c/*.rss or group_name='外部投喂') as source_kind='external'
+        try:
+            await conn.execute(text("""
+                UPDATE feed_sources 
+                SET source_kind = 'external' 
+                WHERE id != 'linuxdo-digest' 
+                  AND (feed_url LIKE '%linux.do/c/%.rss' OR group_name = '外部投喂' OR id IN ('11', '36', '14'));
+            """))
+        except Exception:
+            pass
         # Migration: DROP dead table article_images (verified zero references across codebase)
         try:
             await conn.execute(text("DROP TABLE IF EXISTS article_images;"))

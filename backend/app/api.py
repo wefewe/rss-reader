@@ -293,7 +293,9 @@ async def fever_endpoint(request: Request, db: AsyncSession = Depends(get_db)):
 
     # Groups
     if "groups" in params:
-        src_res = await db.execute(select(FeedSource))
+        src_res = await db.execute(
+            select(FeedSource).where(or_(FeedSource.source_kind.is_(None), FeedSource.source_kind != "external"))
+        )
         all_sources = src_res.scalars().all()
         unique_groups = sorted(list(set(s.group_name for s in all_sources)))
 
@@ -310,7 +312,9 @@ async def fever_endpoint(request: Request, db: AsyncSession = Depends(get_db)):
 
     # Feeds
     if "feeds" in params:
-        src_res = await db.execute(select(FeedSource))
+        src_res = await db.execute(
+            select(FeedSource).where(or_(FeedSource.source_kind.is_(None), FeedSource.source_kind != "external"))
+        )
         all_sources = src_res.scalars().all()
 
         fever_feeds = []
@@ -677,8 +681,10 @@ async def list_reader(
     else:
         article_schemas.sort(key=lambda x: (x.rank_score, x.published_at), reverse=True)
 
-    # Query sources
-    src_res = await db.execute(select(FeedSource))
+    # Query sources (exclude external ingestion feeds)
+    src_res = await db.execute(
+        select(FeedSource).where(or_(FeedSource.source_kind.is_(None), FeedSource.source_kind != "external"))
+    )
     sources = src_res.scalars().all()
 
     # Last checked at
@@ -728,18 +734,23 @@ async def ingest_external_feed(data: IngestExternalFeedInput, db: AsyncSession =
     res = await db.execute(stmt)
     source = res.scalars().first()
     if not source:
-        # Create dynamically if missing
+        # Create dynamically if missing with source_kind='external'
         source_id = feed_url.split("/")[-1].replace(".rss", "") or "external"
         source = FeedSource(
             id=source_id,
             title="外部投喂-" + source_id,
             feed_url=feed_url,
             group_name="外部投喂",
-            status="active"
+            status="active",
+            source_kind="external"
         )
         db.add(source)
         await db.commit()
         await db.refresh(source)
+    else:
+        if getattr(source, "source_kind", None) != "external":
+            source.source_kind = "external"
+            await db.commit()
 
     source_id = source.id
     source_title = source.title
@@ -1180,7 +1191,9 @@ async def forward_telegram_endpoint(body: ForwardTelegramInput, db: AsyncSession
 # 16. Export OPML
 @router.get("/opml/export")
 async def export_opml(db: AsyncSession = Depends(get_db)):
-    res = await db.execute(select(FeedSource))
+    res = await db.execute(
+        select(FeedSource).where(or_(FeedSource.source_kind.is_(None), FeedSource.source_kind != "external"))
+    )
     sources = res.scalars().all()
 
     opml = ET.Element("opml", version="2.0")

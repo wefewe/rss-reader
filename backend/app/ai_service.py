@@ -15,7 +15,14 @@ class AIService:
         self.summary_model = settings.LLM_SUMMARY_MODEL
         self.brief_model = settings.LLM_BRIEF_MODEL
 
-    async def _call_llm(self, model: str, messages: list, temperature: float = 0.3, max_tokens: int = 1500) -> Optional[str]:
+    async def _call_llm(
+        self,
+        model: str,
+        messages: list,
+        temperature: float = 0.3,
+        max_tokens: int = 1500,
+        timeout: float = 60.0
+    ) -> Optional[str]:
         headers = {
             "Content-Type": "application/json",
             "User-Agent": "Mozilla/5.0 (RSSReader/1.0)",
@@ -25,7 +32,7 @@ class AIService:
 
         candidate_models = [model]
         # Robust fallback sequence prioritized by latency & reliability on AxonHub
-        for fb in ["gemini-3.8-flash", "glm-5.2", "kimi-k3"]:
+        for fb in ["gemini-3.8-flash", "deepseek-v4.1-flash", "glm-5.3-flash", "kimi-k3"]:
             if fb not in candidate_models:
                 candidate_models.append(fb)
 
@@ -37,8 +44,7 @@ class AIService:
                 "max_tokens": max_tokens,
             }
             try:
-                # 25s timeout per candidate model for agile failover
-                async with httpx.AsyncClient(timeout=25.0) as client:
+                async with httpx.AsyncClient(timeout=timeout) as client:
                     resp = await client.post(f"{self.base_url}/chat/completions", headers=headers, json=payload)
                     if resp.status_code == 200:
                         data = resp.json()
@@ -56,7 +62,8 @@ class AIService:
                     else:
                         logger.warning(f"LLM call {current_model} failed HTTP {resp.status_code}: {resp.text[:150]}")
             except Exception as e:
-                logger.warning(f"LLM call {current_model} failed or timed out: {e}")
+                err_detail = f"{type(e).__name__}: {e}" if str(e) else type(e).__name__
+                logger.warning(f"LLM call {current_model} failed or timed out after {timeout}s: {err_detail}")
 
         return None
 
@@ -188,6 +195,7 @@ class AIService:
         """
         Synthesizes multiple forum topics and floor discussions into a single
         magazine-style structured LINUX DO community digest issue with quick-jump anchors.
+        Includes agile retry with reduced payload and transparent fallback logging with visible markers.
         """
         model = model or self.summary_model or "gemini-3.8-flash"
 
@@ -196,24 +204,27 @@ class AIService:
                 "title": f"🐧 LINUX DO 社区热点内参 ({today_str} {edition_name})",
                 "summary": "💡 一句话速览：本时段暂无新增社区议题，论坛平稳运行中。",
                 "content": f"# 🐧 LINUX DO 社区热点内参 ({today_str} {edition_name})\n\n> 本期暂无新增聚合议题，稍后请留意下一期刊物更新。",
+                "topic_count": 0,
+                "is_fallback": False,
             }
 
-        # Build candidate topics brief for LLM
-        items_text = []
-        for i, t in enumerate(topics[:30], 1):
-            disc_snippets = []
-            for p in (t.get("discussion_posts") or [])[:3]:
-                disc_snippets.append(f"@{p.get('author', '佬友')}: {p.get('content', '')[:100]}")
-            disc_str = (" | 回帖参考: " + " ; ".join(disc_snippets)) if disc_snippets else ""
-            items_text.append(
-                f"{i}. 《{t['title']}》\n"
-                f"   版块: {t.get('group_name', '综合')} | 原帖: {t['url']} | 互动: {t.get('posts_count', 1)} 楼\n"
-                f"   主帖梗概: {(t.get('content') or t.get('summary') or '')[:180]}{disc_str}"
-            )
+        def _build_context(selected_topics: List[Dict[str, Any]], max_chars: int = 180, max_posts: int = 3) -> str:
+            items_text = []
+            for i, t in enumerate(selected_topics, 1):
+                disc_snippets = []
+                for p in (t.get("discussion_posts") or [])[:max_posts]:
+                    disc_snippets.append(f"@{p.get('author', '佬友')}: {p.get('content', '')[:100]}")
+                disc_str = (" | 回帖参考: " + " ; ".join(disc_snippets)) if disc_snippets else ""
+                clean_t = t.get("clean_title") or t.get("title") or "未命名议题"
+                items_text.append(
+                    f"{i}. 《{clean_t}》\n"
+                    f"   版块: {t.get('group_name', '综合')} | 原帖: {t['url']} | 互动: {t.get('posts_count', 1)} 楼\n"
+                    f"   主帖梗概: {(t.get('content') or t.get('summary') or '')[:max_chars]}{disc_str}"
+                )
+            return "\n\n".join(items_text)
 
-        context_payload = "\n\n".join(items_text)
-
-        prompt = f"""你是一位敏锐、专业且精通极客与开源社区文化的私人数字首席主编。
+        def _build_prompt(context_payload: str) -> str:
+            return f"""你是一位敏锐、专业且精通极客与开源社区文化的私人数字首席主编。
 请将以下 LINUX DO 社区在过去数小时内发生的精选议题与讨论回帖，编纂为一份高质量、高信息密度的《LINUX DO 社区热点内参 ({today_str} {edition_name})》。
 
 【扫描到的社区议题与回帖数据】：
@@ -245,26 +256,56 @@ class AIService:
    [一句话技术洞察]
 5. 直接输出 Markdown 文本，严格保留 markdown 超链接格式 `[{{title}}]({{url}})`，绝不添加多余包裹前缀。"""
 
-        messages = [{"role": "user", "content": prompt}]
-        res = await self._call_llm(model, messages, temperature=0.2, max_tokens=2500)
-        
-        content = res or ""
+        # ── Attempt 1: Full magazine synthesis (up to 25 topics, 80s timeout) ──
+        context_payload_1 = _build_context(topics[:25], max_chars=160, max_posts=2)
+        prompt_1 = _build_prompt(context_payload_1)
+        res = await self._call_llm(model, [{"role": "user", "content": prompt_1}], temperature=0.2, max_tokens=2500, timeout=80.0)
+
+        # ── Attempt 2 (Retry): If attempt 1 returned empty/timed out, retry with focused topics (12 topics) ──
+        if not res or not res.strip():
+            logger.warning(
+                f"LINUX DO Forum Digest ({today_str} {edition_name}) attempt 1 returned empty or timed out. "
+                "Retrying with focused payload (top 12 topics, max_tokens=1800)..."
+            )
+            context_payload_2 = _build_context(topics[:12], max_chars=120, max_posts=1)
+            prompt_2 = _build_prompt(context_payload_2)
+            res = await self._call_llm(model, [{"role": "user", "content": prompt_2}], temperature=0.2, max_tokens=1800, timeout=80.0)
+
+        is_fallback = False
+        content = (res or "").strip()
+
+        # ── Fallback: If retry also failed, trigger explicitly logged fallback template ──
         if not content:
-            # Fallback simple template if LLM completely timed out
-            content = f"# 🐧 LINUX DO 社区热点内参 ({today_str} {edition_name})\n\n## 📋 议题摘录\n\n"
+            is_fallback = True
+            logger.warning(
+                f"LINUX DO Forum Digest ({today_str} {edition_name}) LLM synthesis failed after 2 attempts. "
+                "Cause: candidate models returned empty or timed out. Falling back to topic excerpt template with visible warning marker."
+            )
+            content = (
+                f"# 🐧 LINUX DO 社区热点内参 ({today_str} {edition_name})\n\n"
+                f"> ⚠️ **系统注记**：本期主编 AI 综合生成超时，已自动降级为社区精选议题归档。\n\n"
+                f"## 📋 议题摘录\n\n"
+            )
             for t in topics[:15]:
-                content += f"- **[{t['title']}]({t['url']})** · `{t.get('group_name')}` ({t.get('posts_count', 1)}楼)\n"
+                clean_t = t.get("clean_title") or t.get("title") or "议题"
+                content += f"- **[{clean_t}]({t['url']})** · `{t.get('group_name', '综合')}` ({t.get('posts_count', 1)}楼)\n"
 
         # Generate 1-sentence TL;DR for article.summary
         tldr_prompt = f"请为以下期刊生成 1 句高密度中文速览（35字以内，以 💡 **一句话速览**：开头）：\n{content[:1000]}"
-        tldr_res = await self._call_llm(model, [{"role": "user", "content": tldr_prompt}], temperature=0.1, max_tokens=150)
-        summary = (tldr_res or "💡 **一句话速览**：LINUX DO 社区热点与开源福利动态汇编。").strip()
+        tldr_res = await self._call_llm(model, [{"role": "user", "content": tldr_prompt}], temperature=0.1, max_tokens=150, timeout=30.0)
+        raw_summary = (tldr_res or "💡 **一句话速览**：LINUX DO 社区热点与开源福利动态汇编。").strip()
+
+        if is_fallback:
+            summary = f"⚠️ [降级备忘] {raw_summary}"
+        else:
+            summary = raw_summary
 
         return {
             "title": f"🐧 LINUX DO 社区热点内参 ({today_str} {edition_name})",
             "summary": summary,
             "content": content,
-            "topic_count": len(topics)
+            "topic_count": len(topics),
+            "is_fallback": is_fallback,
         }
 
     async def bilingual_translate(

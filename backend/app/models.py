@@ -30,6 +30,7 @@ class FeedSource(Base):
     etag = Column(String(255), nullable=True)
     last_modified = Column(String(255), nullable=True)
     consecutive_failures = Column(Integer, default=0)
+    source_kind = Column(String(50), default="rss")
 
 class Article(Base):
     __tablename__ = "articles"

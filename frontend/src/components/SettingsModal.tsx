@@ -59,6 +59,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [togglingSourceId, setTogglingSourceId] = useState<string | null>(null);
   const opmlFileInputRef = useRef<HTMLInputElement>(null);
 
+  const visibleSources = React.useMemo(() => {
+    return sources.filter(s => s.source_kind !== 'external' && s.group_name !== '外部投喂');
+  }, [sources]);
+
   React.useEffect(() => {
     setForm(preferences);
   }, [preferences]);
@@ -221,7 +225,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             }`}
           >
             <Rss size={13} />
-            <span>订阅源健康与 OPML ({sources.length})</span>
+            <span>订阅源健康与 OPML ({visibleSources.length})</span>
           </button>
         </div>
 
@@ -492,7 +496,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 <div className="flex items-center justify-between">
                   <h3 className="font-semibold text-textMuted uppercase tracking-wider text-[11px] flex items-center gap-1.5">
                     <Rss size={13} className="text-accent" />
-                    全量订阅源运行监控 ({sources.length})
+                    全量订阅源运行监控 ({visibleSources.length})
                   </h3>
                   <div className="flex items-center gap-2">
                     {onOpenAddSource && (
@@ -510,7 +514,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 </div>
 
                 <div className="divide-y divide-surfaceBorder/60 border border-surfaceBorder rounded-xl bg-surfaceRaised/40 overflow-hidden">
-                  {sources.map((s) => {
+                  {visibleSources.map((s) => {
                     const isAutoDisabled = s.status === 'disabled';
                     const isUserPaused = s.status === 'user_paused';
                     const isError = s.status === 'error' || (!isAutoDisabled && !isUserPaused && !!s.last_error);

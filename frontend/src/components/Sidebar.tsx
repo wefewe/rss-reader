@@ -59,10 +59,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
 }) => {
   const [collapsedGroups, setCollapsedGroups] = React.useState<Record<string, boolean>>({});
 
-  // Group sources by group_name
+  // Group sources by group_name (defensively skip external ingestion feeds)
   const groupedSources = React.useMemo(() => {
     const map: Record<string, FeedSource[]> = {};
     for (const s of sources) {
+      if (s.source_kind === 'external' || s.group_name === '外部投喂') continue;
       if (!map[s.group_name]) map[s.group_name] = [];
       map[s.group_name].push(s);
     }

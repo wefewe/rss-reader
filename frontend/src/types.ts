@@ -58,6 +58,7 @@ export interface FeedSource {
   last_success_at?: string;
   last_error?: string;
   consecutive_failures?: number;
+  source_kind?: string;
 }
 
 export interface ReaderPreferences {

@@ -106,6 +106,7 @@ class FeedSourceSchema(BaseModel):
     etag: Optional[str] = None
     last_modified: Optional[str] = None
     consecutive_failures: int = 0
+    source_kind: str = "rss"
 
     class Config:
         from_attributes = True

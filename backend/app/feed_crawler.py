@@ -246,8 +246,8 @@ async def fetch_single_feed(
     semaphore concurrency throttling, and offloaded parsing to thread pool.
     Enforces 50-article retention with protection for the current batch.
     """
-    # Exemption Rule 8.4: LINUX DO sources are managed exclusively by external browser worker
-    if "linux.do" in source.feed_url:
+    # Exemption Rule 8.4: External feeds and LINUX DO sources are managed exclusively by external browser worker
+    if getattr(source, "source_kind", None) == "external" or "linux.do" in source.feed_url:
         logger.info(f"Skipping direct HTTP fetch for {source.title} (managed exclusively by external Playwright worker)")
         return
 
@@ -615,8 +615,11 @@ async def refresh_all_feeds():
     async with _refresh_all_lock:
         logger.info("Starting background refresh of all feeds...")
         async with async_session() as session:
-            # Exclude feeds that have been auto-disabled (consecutive_failures >= 10) or user-paused
-            stmt = select(FeedSource).where(FeedSource.status.notin_(["disabled", "user_paused"]))
+            # Exclude feeds that have been auto-disabled, user-paused, or are external ingestion feeds
+            stmt = select(FeedSource).where(
+                FeedSource.status.notin_(["disabled", "user_paused"]),
+                or_(FeedSource.source_kind.is_(None), FeedSource.source_kind != "external")
+            )
             res = await session.execute(stmt)
             sources = res.scalars().all()
 
@@ -798,6 +801,13 @@ async def generate_forum_digest_job(edition: Optional[str] = None) -> Optional[A
         )
 
         # 4. Save as Article in articles table (Upsert)
+        is_fallback = digest_data.get("is_fallback", False)
+        if is_fallback:
+            logger.warning(f"LINUX DO Forum Digest ({today_str} {edition_name}) published in FALLBACK mode (marked with warning prefix).")
+            triage_reason_text = f"AI 精选期刊（降级备忘）：涵盖全论坛高频议题归档 ({edition_name})"
+        else:
+            triage_reason_text = f"AI 精选期刊：涵盖全论坛过去数小时高频议题与楼层讨论 ({edition_name})"
+
         source_id = "linuxdo-digest"
         source_title = "LINUX DO 社区内参"
         group_name = "社区内参"
@@ -817,7 +827,7 @@ async def generate_forum_digest_job(edition: Optional[str] = None) -> Optional[A
             existing_article.triage_signals = [
                 {"dimension": "quality", "effect": 0.5, "evidence": f"聚合 {len(valid_topics)} 篇精选议题", "label": "社区内参"}
             ]
-            existing_article.triage_reason = f"AI 精选期刊：涵盖全论坛过去数小时高频议题与楼层讨论 ({edition_name})"
+            existing_article.triage_reason = triage_reason_text
             article = existing_article
         else:
             article = Article(
@@ -839,7 +849,7 @@ async def generate_forum_digest_job(edition: Optional[str] = None) -> Optional[A
                 triage_signals=[
                     {"dimension": "quality", "effect": 0.5, "evidence": f"聚合 {len(valid_topics)} 篇精选议题", "label": "社区内参"}
                 ],
-                triage_reason=f"AI 精选期刊：涵盖全论坛过去数小时高频议题与楼层讨论 ({edition_name})"
+                triage_reason=triage_reason_text
             )
             session.add(article)
 
