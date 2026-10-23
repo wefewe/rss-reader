@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { ArticleList } from './components/ArticleList';
 import { ReaderView } from './components/ReaderView';
@@ -54,6 +54,11 @@ export const App: React.FC = () => {
   const [currentSourceId, setCurrentSourceId] = useState<string>('');
   const [currentView, setCurrentView] = useState<ViewType>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState<string>('');
+  const [totalArticles, setTotalArticles] = useState<number>(0);
+  const [isLoadingMore, setIsLoadingMore] = useState<boolean>(false);
+  const abortControllerRef = useRef<AbortController | null>(null);
+
   const [filterTier, setFilterTier] = useState<string>('normal'); // 'normal' | 'featured' | 'hidden'
   const [tierCounts, setTierCounts] = useState<{ normal: number; featured: number; hidden: number }>({
     normal: 0,
@@ -61,6 +66,14 @@ export const App: React.FC = () => {
     hidden: 0,
   });
   const [selectedArticleId, setSelectedArticleId] = useState<string | null>(null);
+
+  // 300ms debounce on search input
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearchQuery(searchQuery);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
 
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
   const [isBriefModalOpen, setIsBriefModalOpen] = useState<boolean>(false);
@@ -99,17 +112,27 @@ export const App: React.FC = () => {
     return () => window.removeEventListener('reader_unauthorized', handleUnauthorized);
   }, []);
 
-  // Load Reader Data
+  // Load Reader Data (with AbortController and pagination offset=0)
   const loadData = useCallback(async () => {
     if (!isAuthenticated) return;
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     try {
       const data = await listReader({
         group_name: currentGroup,
         source_id: currentSourceId || undefined,
         view: currentView,
-        search: searchQuery || undefined,
-      });
+        search: debouncedSearchQuery || undefined,
+        offset: 0,
+        limit: 50,
+      }, controller.signal);
+
       setArticles(data.articles);
+      setTotalArticles(data.total);
       setSources(data.sources);
       if (data.preferences) setPreferences(data.preferences);
       if (data.tier_counts) {
@@ -126,16 +149,65 @@ export const App: React.FC = () => {
       if (data.articles.length > 0 && !selectedArticleId && window.innerWidth >= 768) {
         setSelectedArticleId(data.articles[0].id);
       }
-    } catch (e) {
-      console.error('Failed to load reader data:', e);
+    } catch (e: any) {
+      if (e?.name !== 'AbortError') {
+        console.error('Failed to load reader data:', e);
+      }
     }
-  }, [isAuthenticated, currentGroup, currentSourceId, currentView, searchQuery, selectedArticleId]);
+  }, [isAuthenticated, currentGroup, currentSourceId, currentView, debouncedSearchQuery, selectedArticleId]);
+
+  // Load More Articles (incremental pagination)
+  const handleLoadMore = useCallback(async () => {
+    if (isLoadingMore || articles.length >= totalArticles) return;
+    setIsLoadingMore(true);
+    try {
+      const data = await listReader({
+        group_name: currentGroup,
+        source_id: currentSourceId || undefined,
+        view: currentView,
+        search: debouncedSearchQuery || undefined,
+        offset: articles.length,
+        limit: 50,
+      });
+      setArticles(prev => {
+        const existingIds = new Set(prev.map(a => a.id));
+        const incoming = data.articles.filter(a => !existingIds.has(a.id));
+        return [...prev, ...incoming];
+      });
+      setTotalArticles(data.total);
+    } catch (e: any) {
+      if (e?.name !== 'AbortError') {
+        console.error('Failed to load more articles:', e);
+      }
+    } finally {
+      setIsLoadingMore(false);
+    }
+  }, [isLoadingMore, articles.length, totalArticles, currentGroup, currentSourceId, currentView, debouncedSearchQuery]);
 
   useEffect(() => {
     if (isAuthenticated) {
       loadData();
     }
   }, [isAuthenticated, loadData]);
+
+  // On-demand fetch full article content when an article without content is selected
+  useEffect(() => {
+    if (!selectedArticleId) return;
+    const currentArt = articles.find(a => a.id === selectedArticleId);
+    if (currentArt && currentArt.content === undefined) {
+      let isCancelled = false;
+      getArticle(selectedArticleId).then(fullArt => {
+        if (!isCancelled && fullArt) {
+          setArticles(prev => prev.map(a => a.id === fullArt.id ? { ...a, ...fullArt } : a));
+        }
+      }).catch(err => {
+        console.error('Failed to fetch full article detail:', err);
+      });
+      return () => {
+        isCancelled = true;
+      };
+    }
+  }, [selectedArticleId, articles]);
 
   // Selected Article Object
   const selectedArticle = useMemo(() => {
@@ -417,6 +489,10 @@ export const App: React.FC = () => {
               onFilterTierChange={setFilterTier}
               tierCounts={tierCounts}
               onBackToSidebar={() => setMobileView('sidebar')}
+              totalArticles={totalArticles}
+              hasMore={articles.length < totalArticles}
+              isLoadingMore={isLoadingMore}
+              onLoadMore={handleLoadMore}
             />
           </div>
 

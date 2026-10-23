@@ -27,6 +27,8 @@ class FeedSource(Base):
     last_checked_at = Column(DateTime, nullable=True)
     last_success_at = Column(DateTime, nullable=True)
     last_error = Column(Text, nullable=True)
+    etag = Column(String(255), nullable=True)
+    last_modified = Column(String(255), nullable=True)
 
 class Article(Base):
     __tablename__ = "articles"

@@ -54,6 +54,41 @@ class ArticleSchema(BaseModel):
     class Config:
         from_attributes = True
 
+# Article List Item Schema (Lean schema without heavy content/bilingual_content)
+class ArticleListItemSchema(BaseModel):
+    id: str
+    source_id: str
+    source_title: str
+    group_name: str
+    title: str
+    clean_title: Optional[str] = None
+    url: str
+    summary: Optional[str] = None
+    published_at: datetime.datetime
+    fetched_at: datetime.datetime
+    image_url: Optional[str] = None
+    image_alt: Optional[str] = None
+    is_read: bool = False
+    is_starred: bool = False
+    feedback: Optional[str] = None
+    value_score: float = 0.5
+    value_tier: str = "general"
+    quality_score: float = 0.5
+    promotion_score: float = 0.0
+    expiry_score: float = 0.0
+    content_type: str = "article"
+    content_type_label: str = "文章"
+    triage_signals: List[Dict[str, Any]] = []
+    triage_reason: Optional[str] = None
+    ai_value_score: Optional[float] = None
+    ai_value_reason: Optional[str] = None
+    rank_score: float = 0.0
+    needs_triage: bool = False
+    discussion_posts: List[Dict[str, Any]] = []
+
+    class Config:
+        from_attributes = True
+
 # Feed Source Schema
 class FeedSourceSchema(BaseModel):
     id: str
@@ -68,6 +103,8 @@ class FeedSourceSchema(BaseModel):
     last_checked_at: Optional[datetime.datetime] = None
     last_success_at: Optional[datetime.datetime] = None
     last_error: Optional[str] = None
+    etag: Optional[str] = None
+    last_modified: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -89,7 +126,8 @@ class ReaderPreferencesSchema(BaseModel):
 
 # API Action Payloads & Responses
 class ListReaderResponse(BaseModel):
-    articles: List[ArticleSchema]
+    articles: List[ArticleListItemSchema]
+    total: int = 0
     sources: List[FeedSourceSchema]
     preferences: ReaderPreferencesSchema
     last_checked_at: Optional[str] = None

@@ -137,9 +137,67 @@ async def init_default_sources():
             session.add(ReaderPreference(id=1))
         await session.commit()
 
-async def fetch_single_feed(source: FeedSource):
+def _sync_parse_feed(content: bytes) -> tuple[list, Optional[str]]:
     """
-    Fetches and parses a single RSS feed.
+    Synchronous CPU-bound parsing of RSS/Atom feed XML and entry content.
+    Executed in a thread pool to avoid blocking the event loop.
+    Returns: (parsed_items, bozo_error)
+    """
+    feed = feedparser.parse(content)
+    if feed.bozo and not feed.entries:
+        return [], str(feed.bozo_exception)
+
+    parsed_items = []
+    for entry in feed.entries[:50]:
+        url = entry.get("link", "").strip()
+        if not url:
+            continue
+
+        title = entry.get("title", "无标题").strip()
+        raw_summary = entry.get("summary") or entry.get("description") or ""
+        summary = clean_html(raw_summary)[:1000]
+
+        raw_rich = ""
+        content_list = entry.get("content") or []
+        if content_list and isinstance(content_list, list):
+            for c_item in content_list:
+                if isinstance(c_item, dict) and c_item.get("value"):
+                    raw_rich = c_item["value"]
+                    break
+        elif entry.get("content_encoded"):
+            raw_rich = entry.get("content_encoded")
+
+        content_md, entry_img = extract_rich_content_and_image(raw_rich or raw_summary)
+        if not content_md or len(content_md) < 50:
+            content_md = None
+
+        pub_date = (
+            entry.get("published")
+            or entry.get("updated")
+            or entry.get("pubDate")
+        )
+        published_at = parse_date(pub_date)
+
+        parsed_items.append({
+            "url": url,
+            "title": title,
+            "clean_title": debuzz_title(title),
+            "summary": summary,
+            "content": content_md,
+            "image_url": entry_img,
+            "published_at": published_at,
+        })
+
+    return parsed_items, None
+
+async def fetch_single_feed(
+    source: FeedSource,
+    client: Optional[httpx.AsyncClient] = None,
+    sem: Optional[asyncio.Semaphore] = None,
+):
+    """
+    Fetches and parses a single RSS feed with conditional requests (ETag / Last-Modified),
+    semaphore concurrency throttling, and offloaded parsing to thread pool.
     Enforces 50-article retention with protection for the current batch.
     """
     # Exemption Rule 8.4: LINUX DO sources are managed exclusively by external browser worker
@@ -147,21 +205,60 @@ async def fetch_single_feed(source: FeedSource):
         logger.info(f"Skipping direct HTTP fetch for {source.title} (managed exclusively by external Playwright worker)")
         return
 
-    logger.info(f"Checking feed: {source.title} ({source.feed_url})")
     source_id = source.id
     source_title = source.title
     group_name = source.group_name
 
-    try:
-        async with httpx.AsyncClient(headers=HEADERS, timeout=20.0, follow_redirects=True, verify=False) as client:
-            resp = await client.get(source.feed_url)
-            if resp.status_code >= 400:
-                raise Exception(f"HTTP {resp.status_code} {resp.reason_phrase}")
-            content = resp.content
+    # Conditional HTTP headers
+    req_headers = dict(HEADERS)
+    if source.etag:
+        req_headers["If-None-Match"] = source.etag
+    if source.last_modified:
+        req_headers["If-Modified-Since"] = source.last_modified
 
-        feed = feedparser.parse(content)
-        if feed.bozo and not feed.entries:
-            raise Exception(f"Invalid XML / Feed parse error: {feed.bozo_exception}")
+    async def _do_http_get(http_client: httpx.AsyncClient) -> httpx.Response:
+        logger.info(f"Checking feed: {source_title} ({source.feed_url})")
+        return await http_client.get(source.feed_url, headers=req_headers)
+
+    try:
+        if sem:
+            async with sem:
+                if client:
+                    resp = await _do_http_get(client)
+                else:
+                    async with httpx.AsyncClient(headers=HEADERS, timeout=20.0, follow_redirects=True, verify=False) as c:
+                        resp = await _do_http_get(c)
+        else:
+            if client:
+                resp = await _do_http_get(client)
+            else:
+                async with httpx.AsyncClient(headers=HEADERS, timeout=20.0, follow_redirects=True, verify=False) as c:
+                    resp = await _do_http_get(c)
+
+        # Handle 304 Not Modified: skip parsing and enrichment entirely
+        if resp.status_code == 304:
+            logger.info(f"304 Not Modified for {source_title} ({source.feed_url}) - skipping parsing and enrichment")
+            async with async_session() as session:
+                db_source = await session.get(FeedSource, source_id)
+                if db_source:
+                    db_source.last_checked_at = datetime.datetime.utcnow()
+                    db_source.last_success_at = datetime.datetime.utcnow()
+                    db_source.last_error = None
+                    db_source.status = "active"
+                    await session.commit()
+            return
+
+        if resp.status_code >= 400:
+            raise Exception(f"HTTP {resp.status_code} {resp.reason_phrase}")
+
+        content = resp.content
+        new_etag = resp.headers.get("etag")
+        new_last_modified = resp.headers.get("last-modified")
+
+        # Parse XML and extract rich content in worker thread pool
+        parsed_items, parse_err = await asyncio.to_thread(_sync_parse_feed, content)
+        if parse_err:
+            raise Exception(f"Invalid XML / Feed parse error: {parse_err}")
 
         current_batch_ids = set()
         new_articles = []
@@ -173,42 +270,16 @@ async def fetch_single_feed(source: FeedSource):
                 return
 
             db_source.last_checked_at = datetime.datetime.utcnow()
+            if new_etag:
+                db_source.etag = new_etag
+            if new_last_modified:
+                db_source.last_modified = new_last_modified
 
-            for entry in feed.entries[:50]:
-                url = entry.get("link", "").strip()
-                if not url:
-                    continue
-
+            for item in parsed_items:
+                url = item["url"]
                 article_id = f"{source_id}\n{url}"
                 current_batch_ids.add(article_id)
 
-                title = entry.get("title", "无标题").strip()
-                raw_summary = entry.get("summary") or entry.get("description") or ""
-                summary = clean_html(raw_summary)[:1000]
-
-                # Check rich full content from RSS (e.g. content:encoded)
-                raw_rich = ""
-                content_list = entry.get("content") or []
-                if content_list and isinstance(content_list, list):
-                    for c_item in content_list:
-                        if isinstance(c_item, dict) and c_item.get("value"):
-                            raw_rich = c_item["value"]
-                            break
-                elif entry.get("content_encoded"):
-                    raw_rich = entry.get("content_encoded")
-
-                content_md, entry_img = extract_rich_content_and_image(raw_rich or raw_summary)
-                if not content_md or len(content_md) < 50:
-                    content_md = None
-
-                pub_date = (
-                    entry.get("published")
-                    or entry.get("updated")
-                    or entry.get("pubDate")
-                )
-                published_at = parse_date(pub_date)
-
-                # Check if exists
                 existing_article = await session.get(Article, article_id)
                 if not existing_article:
                     art = Article(
@@ -216,13 +287,13 @@ async def fetch_single_feed(source: FeedSource):
                         source_id=source_id,
                         source_title=source_title,
                         group_name=group_name,
-                        title=title,
-                        clean_title=debuzz_title(title),
+                        title=item["title"],
+                        clean_title=item["clean_title"],
                         url=url,
-                        summary=summary,
-                        content=content_md,
-                        image_url=entry_img,
-                        published_at=published_at,
+                        summary=item["summary"],
+                        content=item["content"],
+                        image_url=item["image_url"],
+                        published_at=item["published_at"],
                         fetched_at=datetime.datetime.utcnow(),
                         is_read=False,
                         value_tier="general",
@@ -233,21 +304,19 @@ async def fetch_single_feed(source: FeedSource):
                     new_articles.append(art)
                 else:
                     # Update summary/content/image if empty
-                    if not existing_article.summary and summary:
-                        existing_article.summary = summary
-                    if not existing_article.content and content_md:
-                        existing_article.content = content_md
-                    if not existing_article.image_url and entry_img:
-                        existing_article.image_url = entry_img
+                    if not existing_article.summary and item["summary"]:
+                        existing_article.summary = item["summary"]
+                    if not existing_article.content and item["content"]:
+                        existing_article.content = item["content"]
+                    if not existing_article.image_url and item["image_url"]:
+                        existing_article.image_url = item["image_url"]
 
             # Rule 8.3: 50-article retention protection (excluding starred and highlighted articles)
-            # Find all articles for this source ordered by published_at DESC
             stmt = select(Article.id).where(Article.source_id == source_id).order_by(desc(Article.published_at))
             res = await session.execute(stmt)
             all_ids = [row[0] for row in res.fetchall()]
 
             if len(all_ids) > 50:
-                # Articles eligible for pruning: those beyond top 50 AND not in current_batch_ids
                 candidates = all_ids[50:]
                 to_check = [aid for aid in candidates if aid not in current_batch_ids]
                 if to_check:
@@ -282,7 +351,7 @@ async def fetch_single_feed(source: FeedSource):
 
             await session.commit()
 
-        # Background AI enrichment for newly discovered articles (Pre-computation!)
+        # Background AI enrichment for newly discovered articles
         if new_articles:
             asyncio.create_task(enrich_new_articles(new_articles))
 
@@ -369,16 +438,17 @@ async def enrich_new_articles(articles: list):
             logger.warning(f"Error enriching article {a.title}: {e}")
 
 async def refresh_all_feeds():
-    """Refreshes all 14 feeds asynchronously."""
+    """Refreshes all feeds asynchronously with concurrency semaphore and reused AsyncClient."""
     logger.info("Starting background refresh of all feeds...")
     async with async_session() as session:
         stmt = select(FeedSource)
         res = await session.execute(stmt)
         sources = res.scalars().all()
 
-    # Parallelize fetch in worker batches
-    tasks = [fetch_single_feed(s) for s in sources]
-    await asyncio.gather(*tasks, return_exceptions=True)
+    sem = asyncio.Semaphore(5)
+    async with httpx.AsyncClient(headers=HEADERS, timeout=20.0, follow_redirects=True, verify=False) as client:
+        tasks = [fetch_single_feed(s, client=client, sem=sem) for s in sources]
+        await asyncio.gather(*tasks, return_exceptions=True)
     logger.info("All feeds refreshed.")
 
 async def run_daily_brief_job():

@@ -72,8 +72,11 @@ export async function listReader(params: {
   source_id?: string;
   view?: ViewType;
   search?: string;
-}): Promise<{
+  offset?: number;
+  limit?: number;
+}, signal?: AbortSignal): Promise<{
   articles: Article[];
+  total: number;
   sources: FeedSource[];
   preferences: ReaderPreferences;
   last_checked_at: string;
@@ -84,8 +87,10 @@ export async function listReader(params: {
   if (params.source_id) query.set('source_id', params.source_id);
   if (params.view) query.set('view', params.view);
   if (params.search) query.set('search', params.search);
+  if (typeof params.offset === 'number') query.set('offset', String(params.offset));
+  if (typeof params.limit === 'number') query.set('limit', String(params.limit));
 
-  const res = await request(`${API_BASE}/listreader?${query.toString()}`);
+  const res = await request(`${API_BASE}/listreader?${query.toString()}`, { signal });
   if (!res.ok) throw new Error(`Failed to list articles: ${res.statusText}`);
   return res.json();
 }

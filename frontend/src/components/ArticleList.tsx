@@ -18,6 +18,10 @@ interface ArticleListProps {
   onFilterTierChange: (tier: string) => void;
   tierCounts?: { normal: number; featured: number; hidden: number };
   onBackToSidebar?: () => void;
+  totalArticles?: number;
+  hasMore?: boolean;
+  isLoadingMore?: boolean;
+  onLoadMore?: () => void;
 }
 
 export const ArticleList: React.FC<ArticleListProps> = ({
@@ -34,6 +38,10 @@ export const ArticleList: React.FC<ArticleListProps> = ({
   onFilterTierChange,
   tierCounts,
   onBackToSidebar,
+  totalArticles,
+  hasMore,
+  isLoadingMore,
+  onLoadMore,
 }) => {
   const [isDebuzz, setIsDebuzz] = useState<boolean>(() => {
     return localStorage.getItem('reader_debuzz') !== 'false';
@@ -130,6 +138,15 @@ export const ArticleList: React.FC<ArticleListProps> = ({
       }
     }
   }, [selectedArticleId]);
+
+  const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    const target = e.currentTarget;
+    if (onLoadMore && hasMore && !isLoadingMore) {
+      if (target.scrollHeight - target.scrollTop - target.clientHeight < 160) {
+        onLoadMore();
+      }
+    }
+  };
 
   return (
     <div className="w-full md:w-[360px] lg:w-[380px] bg-background border-r border-surfaceBorder flex flex-col h-screen shrink-0">
@@ -238,32 +255,55 @@ export const ArticleList: React.FC<ArticleListProps> = ({
       </div>
 
       {/* Article List Scroll View */}
-      <div className="flex-1 overflow-y-auto divide-y divide-surfaceBorder/60">
+      <div 
+        onScroll={handleScroll}
+        className="flex-1 overflow-y-auto divide-y divide-surfaceBorder/60"
+      >
         {clusteredItems.length === 0 ? (
           <div className="p-8 text-center text-textMuted text-xs flex flex-col items-center justify-center gap-2 h-64">
             <SlidersHorizontal size={24} className="opacity-30" />
             <p>暂无符合当前筛选条件的文章</p>
           </div>
         ) : (
-          clusteredItems.map(({ primary, related }) => (
-            <ArticleCard
-              key={primary.id}
-              article={primary}
-              isSelected={selectedArticleId === primary.id}
-              onSelect={() => onSelectArticle(primary)}
-              onToggleStar={(e) => {
-                e.stopPropagation();
-                onToggleStar(primary.id);
-              }}
-              onFeedback={(e, type) => {
-                e.stopPropagation();
-                onFeedback(primary.id, type);
-              }}
-              isDebuzz={isDebuzz}
-              relatedArticles={related}
-              onSelectRelated={onSelectArticle}
-            />
-          ))
+          <>
+            {clusteredItems.map(({ primary, related }) => (
+              <ArticleCard
+                key={primary.id}
+                article={primary}
+                isSelected={selectedArticleId === primary.id}
+                onSelect={() => onSelectArticle(primary)}
+                onToggleStar={(e) => {
+                  e.stopPropagation();
+                  onToggleStar(primary.id);
+                }}
+                onFeedback={(e, type) => {
+                  e.stopPropagation();
+                  onFeedback(primary.id, type);
+                }}
+                isDebuzz={isDebuzz}
+                relatedArticles={related}
+                onSelectRelated={onSelectArticle}
+              />
+            ))}
+
+            {/* Pagination / Load More Footer */}
+            {hasMore && (
+              <div className="p-4 text-center">
+                <button
+                  onClick={onLoadMore}
+                  disabled={isLoadingMore}
+                  className="w-full py-2 px-3 text-xs text-textMuted hover:text-textPrimary bg-surface hover:bg-surfaceRaised border border-surfaceBorder rounded-lg transition-colors disabled:opacity-50 font-medium"
+                >
+                  {isLoadingMore ? "正在加载更多文章..." : `加载更多 (已展示 ${articles.length} / 共 ${totalArticles ?? articles.length} 篇)`}
+                </button>
+              </div>
+            )}
+            {!hasMore && articles.length > 0 && (
+              <div className="p-4 text-center text-[11px] text-textMuted/60 font-mono">
+                已加载全部 {articles.length} 篇文章
+              </div>
+            )}
+          </>
         )}
       </div>
     </div>

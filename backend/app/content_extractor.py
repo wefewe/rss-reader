@@ -1,5 +1,6 @@
 import logging
 import re
+import asyncio
 from urllib.parse import urljoin
 import httpx
 import trafilatura
@@ -89,6 +90,83 @@ def _dedupe_markdown_images(md: str) -> str:
     return "\n".join(out_lines)
 
 
+def _sync_parse_and_extract(html: str, url: str) -> dict:
+    """
+    CPU-bound HTML normalization, trafilatura extraction, and BeautifulSoup parsing.
+    Executed in a thread pool to avoid blocking the asyncio event loop.
+    """
+    # 预处理：修复懒加载图片 + 去除 noscript 兜底重复
+    normalized_html = _normalize_lazy_images(html, url)
+
+    # 1. Try trafilatura (best-in-class extraction)
+    extracted = trafilatura.extract(
+        normalized_html,
+        include_comments=False,
+        include_tables=True,
+        include_images=True,
+        output_format="markdown",
+        favor_precision=True
+    )
+    if extracted:
+        extracted = _dedupe_markdown_images(extracted)
+
+    # 2. Extract leading image if available
+    img_url = None
+    if extracted:
+        img_match = re.search(r'!\[.*?\]\((https?://[^\s\)]+)\)', extracted)
+        if img_match:
+            img_url = img_match.group(1)
+
+    soup = BeautifulSoup(normalized_html, "html.parser")
+    if not img_url:
+        og_img = soup.find("meta", property="og:image")
+        if og_img and og_img.get("content"):
+            img_url = og_img["content"]
+
+    if not img_url:
+        content_area = (
+            soup.find("article")
+            or soup.find("div", class_=re.compile(r"entry-content|post-content|article-content"))
+            or soup.find("main")
+        )
+        if content_area:
+            for img in content_area.find_all("img"):
+                src = img.get("src") or img.get("data-lazy-src") or img.get("data-src") or img.get("data-original")
+                if src and not re.search(r'logo|avatar|icon|qrcode|wechat|alipay|flag', src, re.I):
+                    img_url = src
+                    break
+
+    if extracted and len(extracted.strip()) > 50:
+        return {
+            "content": extracted.strip(),
+            "image_url": img_url,
+            "error": None,
+        }
+
+    # Fallback to simple soup extraction (retain images as markdown)
+    body = soup.find("article") or soup.find("main") or soup.find("body")
+    if body:
+        for tag in body(["script", "style", "noscript", "nav", "footer", "header"]):
+            tag.decompose()
+        for img in body.find_all("img"):
+            src = img.get("src")
+            if src:
+                alt = img.get("alt") or "image"
+                img.replace_with(f"\n\n![{alt}]({src})\n\n")
+        for br in body.find_all("br"):
+            br.replace_with("\n")
+        text = body.get_text(separator="\n").strip()
+        text = re.sub(r"\n{3,}", "\n\n", text)
+        text = _dedupe_markdown_images(text)
+        return {
+            "content": text[:50000] if text else None,
+            "image_url": img_url,
+            "error": None,
+        }
+
+    return {"content": None, "error": "未能提取有效正文内容"}
+
+
 async def extract_fulltext_from_url(url: str, timeout: float = 20.0) -> dict:
     """
     Fetches URL, extracts clean readable full text and title/images.
@@ -109,76 +187,7 @@ async def extract_fulltext_from_url(url: str, timeout: float = 20.0) -> dict:
                 }
             html = resp.text
 
-        # 预处理：修复懒加载图片 + 去除 noscript 兜底重复
-        normalized_html = _normalize_lazy_images(html, url)
-
-        # 1. Try trafilatura (best-in-class extraction)
-        extracted = trafilatura.extract(
-            normalized_html,
-            include_comments=False,
-            include_tables=True,
-            include_images=True,
-            output_format="markdown",
-            favor_precision=True
-        )
-        if extracted:
-            extracted = _dedupe_markdown_images(extracted)
-
-        # 2. Extract leading image if available
-        img_url = None
-        if extracted:
-            img_match = re.search(r'!\[.*?\]\((https?://[^\s\)]+)\)', extracted)
-            if img_match:
-                img_url = img_match.group(1)
-
-        soup = BeautifulSoup(normalized_html, "html.parser")
-        if not img_url:
-            og_img = soup.find("meta", property="og:image")
-            if og_img and og_img.get("content"):
-                img_url = og_img["content"]
-
-        if not img_url:
-            content_area = (
-                soup.find("article")
-                or soup.find("div", class_=re.compile(r"entry-content|post-content|article-content"))
-                or soup.find("main")
-            )
-            if content_area:
-                for img in content_area.find_all("img"):
-                    src = img.get("src") or img.get("data-lazy-src") or img.get("data-src") or img.get("data-original")
-                    if src and not re.search(r'logo|avatar|icon|qrcode|wechat|alipay|flag', src, re.I):
-                        img_url = src
-                        break
-
-        if extracted and len(extracted.strip()) > 50:
-            return {
-                "content": extracted.strip(),
-                "image_url": img_url,
-                "error": None,
-            }
-
-        # Fallback to simple soup extraction (retain images as markdown)
-        body = soup.find("article") or soup.find("main") or soup.find("body")
-        if body:
-            for tag in body(["script", "style", "noscript", "nav", "footer", "header"]):
-                tag.decompose()
-            for img in body.find_all("img"):
-                src = img.get("src")
-                if src:
-                    alt = img.get("alt") or "image"
-                    img.replace_with(f"\n\n![{alt}]({src})\n\n")
-            for br in body.find_all("br"):
-                br.replace_with("\n")
-            text = body.get_text(separator="\n").strip()
-            text = re.sub(r"\n{3,}", "\n\n", text)
-            text = _dedupe_markdown_images(text)
-            return {
-                "content": text[:50000] if text else None,
-                "image_url": img_url,
-                "error": None,
-            }
-
-        return {"content": None, "error": "未能提取有效正文内容"}
+        return await asyncio.to_thread(_sync_parse_and_extract, html, url)
     except Exception as e:
         logger.warning(f"Failed to fetch fulltext for {url}: {e}")
         return {"content": None, "error": str(e)}

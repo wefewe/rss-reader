@@ -13,12 +13,14 @@ import bleach
 from fastapi import APIRouter, Depends, HTTPException, Query, Body, Request, UploadFile, File
 from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update, delete, desc, func, or_, cast, String
+from sqlalchemy.orm import defer
+from sqlalchemy import select, update, delete, desc, func, or_, and_, cast, String, text, literal_column
 from .database import get_db
 from .models import FeedSource, Article, ReaderPreference, DigestRecord, ArticleImage, ArticleHighlight, ForumStagingTopic
 from .schemas import (
     ListReaderResponse,
     ArticleSchema,
+    ArticleListItemSchema,
     FeedSourceSchema,
     ReaderPreferencesSchema,
     GetArticleInput,
@@ -346,6 +348,13 @@ async def update_source_counters(session: AsyncSession, source_id: str):
     source.article_count = tot or 0
     source.unread_count = unr or 0
 
+def _clean_fts5_query(raw_query: str) -> str:
+    cleaned = re.sub(r'[^\w\s\u4e00-\u9fa5]', ' ', raw_query).strip()
+    tokens = [t for t in cleaned.split() if t]
+    if not tokens:
+        return ""
+    return " ".join(f'"{t}"' for t in tokens)
+
 # 1. listreader
 @router.post("/listreader")
 @router.get("/listreader")
@@ -354,7 +363,8 @@ async def list_reader(
     source_id: Optional[str] = Query(None),
     view: Optional[str] = Query("all"), # all, unread, starred, featured
     search: Optional[str] = Query(None),
-    limit: int = Query(200),
+    offset: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=500),
     db: AsyncSession = Depends(get_db)
 ):
     # Get preferences
@@ -365,32 +375,94 @@ async def list_reader(
         await db.commit()
         await db.refresh(pref)
 
-    # Query articles
-    stmt = select(Article)
+    # Build filter conditions
+    filters = []
     if group_name and group_name != "全部":
-        stmt = stmt.where(Article.group_name == group_name)
+        filters.append(Article.group_name == group_name)
     if source_id:
-        stmt = stmt.where(Article.source_id == source_id)
+        filters.append(Article.source_id == source_id)
     if view == "unread":
-        stmt = stmt.where(Article.is_read == False)
+        filters.append(Article.is_read == False)
     elif view == "starred":
-        stmt = stmt.where(Article.is_starred == True)
+        filters.append(Article.is_starred == True)
     elif view == "featured":
-        stmt = stmt.where(Article.value_tier == "featured")
+        filters.append(Article.value_tier == "featured")
 
-    if search:
-        kw = f"%{search.strip()}%"
-        stmt = stmt.where(
-            or_(
+    search_filter = None
+    used_fts = False
+    matched_rowids = []
+    if search and search.strip():
+        search_kw = search.strip()
+        fts_query = _clean_fts5_query(search_kw)
+        if fts_query:
+            try:
+                fts_sql = text("SELECT rowid FROM articles_fts WHERE articles_fts MATCH :query")
+                fts_res = await db.execute(fts_sql, {"query": fts_query})
+                matched_rowids = [r[0] for r in fts_res.fetchall()]
+                is_short_cjk = len(search_kw) <= 2 and any('\u4e00' <= ch <= '\u9fa5' for ch in search_kw)
+                if matched_rowids or not is_short_cjk:
+                    search_filter = literal_column("articles.rowid").in_(matched_rowids)
+                    used_fts = True
+            except Exception as e:
+                logger.warning(f"FTS5 search failed, falling back to ILIKE: {e}")
+                used_fts = False
+
+        if not used_fts:
+            kw = f"%{search_kw}%"
+            search_filter = or_(
                 Article.title.ilike(kw),
                 Article.summary.ilike(kw),
                 Article.content.ilike(kw),
                 cast(Article.discussion_posts, String).ilike(kw)
             )
-        )
 
-    # Order by rank_score DESC, published_at DESC
-    stmt = stmt.order_by(desc(Article.rank_score), desc(Article.published_at)).limit(limit)
+    if search_filter is not None:
+        filters.append(search_filter)
+
+    # Count total matching articles for true pagination
+    count_stmt = select(func.count(Article.id))
+    if filters:
+        count_stmt = count_stmt.where(and_(*filters))
+    total = (await db.execute(count_stmt)).scalar() or 0
+
+    # Calculate real-time counts across value tiers for global view tabs
+    tier_filters = []
+    if group_name and group_name != "全部":
+        tier_filters.append(Article.group_name == group_name)
+    if source_id:
+        tier_filters.append(Article.source_id == source_id)
+    if view == "unread":
+        tier_filters.append(Article.is_read == False)
+    elif view == "starred":
+        tier_filters.append(Article.is_starred == True)
+    if search_filter is not None:
+        tier_filters.append(search_filter)
+
+    tier_stmt = select(Article.value_tier, func.count(Article.id))
+    if tier_filters:
+        tier_stmt = tier_stmt.where(and_(*tier_filters))
+    tier_stmt = tier_stmt.group_by(Article.value_tier)
+    tier_rows = (await db.execute(tier_stmt)).all()
+    tier_map = {r[0]: r[1] for r in tier_rows}
+    featured_c = tier_map.get("featured", 0)
+    general_c = tier_map.get("general", 0)
+    hidden_c = tier_map.get("hidden", 0)
+    tier_counts = {
+        "normal": featured_c + general_c,
+        "featured": featured_c,
+        "hidden": hidden_c,
+    }
+
+    # Query paginated articles with deferred large text fields
+    stmt = (
+        select(Article)
+        .options(defer(Article.content), defer(Article.bilingual_content))
+    )
+    if filters:
+        stmt = stmt.where(and_(*filters))
+
+    # Order by rank_score DESC, published_at DESC with offset & limit
+    stmt = stmt.order_by(desc(Article.rank_score), desc(Article.published_at)).offset(offset).limit(limit)
     res = await db.execute(stmt)
     articles = res.scalars().all()
 
@@ -419,9 +491,46 @@ async def list_reader(
     article_schemas = []
 
     for a in articles:
-        schema = ArticleSchema.model_validate(a)
-        if not schema.clean_title:
-            schema.clean_title = debuzz_title(schema.title)
+        compact_posts = []
+        if a.discussion_posts:
+            for i, p in enumerate(a.discussion_posts):
+                if isinstance(p, dict):
+                    compact_posts.append({
+                        "post_number": p.get("post_number", i + 1),
+                        "author": p.get("author", ""),
+                    })
+
+        schema = ArticleListItemSchema(
+            id=a.id,
+            source_id=a.source_id,
+            source_title=a.source_title,
+            group_name=a.group_name,
+            title=a.title,
+            clean_title=a.clean_title or debuzz_title(a.title),
+            url=a.url,
+            summary=a.summary,
+            published_at=a.published_at,
+            fetched_at=a.fetched_at,
+            image_url=a.image_url,
+            image_alt=a.image_alt,
+            is_read=a.is_read,
+            is_starred=a.is_starred,
+            feedback=a.feedback,
+            value_score=a.value_score,
+            value_tier=a.value_tier,
+            quality_score=a.quality_score,
+            promotion_score=a.promotion_score,
+            expiry_score=a.expiry_score,
+            content_type=a.content_type,
+            content_type_label=a.content_type_label,
+            triage_signals=a.triage_signals or [],
+            triage_reason=a.triage_reason,
+            ai_value_score=a.ai_value_score,
+            ai_value_reason=a.ai_value_reason,
+            rank_score=a.rank_score,
+            needs_triage=a.needs_triage,
+            discussion_posts=compact_posts,
+        )
         signals = list(schema.triage_signals or [])
 
         haystack = f"{a.title} {a.summary or ''}".lower()
@@ -512,13 +621,6 @@ async def list_reader(
     # Re-sort by effective rank_score DESC, published_at DESC
     article_schemas.sort(key=lambda x: (x.rank_score, x.published_at), reverse=True)
 
-    # Calculate real-time counts across value tiers
-    tier_counts = {
-        "normal": sum(1 for a in article_schemas if a.value_tier != "hidden"),
-        "featured": sum(1 for a in article_schemas if a.value_tier == "featured"),
-        "hidden": sum(1 for a in article_schemas if a.value_tier == "hidden"),
-    }
-
     # Query sources
     src_res = await db.execute(select(FeedSource))
     sources = src_res.scalars().all()
@@ -530,6 +632,7 @@ async def list_reader(
 
     return {
         "articles": article_schemas,
+        "total": total,
         "sources": [FeedSourceSchema.model_validate(s) for s in sources],
         "preferences": ReaderPreferencesSchema.model_validate(pref),
         "last_checked_at": last_checked,

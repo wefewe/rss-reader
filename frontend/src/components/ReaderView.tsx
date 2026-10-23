@@ -813,7 +813,12 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
               </div>
             )}
 
-            {(isBilingualMode ? (bilingualContent || article.bilingual_content || effectiveContent) : effectiveContent) ? (
+            {article.content === undefined ? (
+              <div className="p-12 text-center text-textMuted text-xs flex flex-col items-center justify-center gap-3">
+                <div className="w-5 h-5 border-2 border-accent border-t-transparent rounded-full animate-spin" />
+                <span className="font-mono text-textMuted/70">正在载入文章正文...</span>
+              </div>
+            ) : (isBilingualMode ? (bilingualContent || article.bilingual_content || effectiveContent) : effectiveContent) ? (
               <div className="prose max-w-none break-words leading-relaxed space-y-4">
                 <ReactMarkdown components={markdownComponents}>
                   {(isBilingualMode ? (bilingualContent || article.bilingual_content || effectiveContent) : effectiveContent) || ''}

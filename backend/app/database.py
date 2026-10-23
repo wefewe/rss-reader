@@ -1,8 +1,11 @@
 import os
+import logging
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import declarative_base
 from sqlalchemy import text
 from .config import settings
+
+logger = logging.getLogger("rss_reader.db")
 
 # If sqlite, ensure directory exists
 if settings.DATABASE_URL.startswith("sqlite"):
@@ -61,6 +64,53 @@ async def init_db():
             await conn.execute(text("DELETE FROM feed_sources WHERE id IN ('linuxdo-gossip', 'linuxdo-welfare', 'linuxdo-resource');"))
         except Exception:
             pass
+        # Migration: ensure etag and last_modified columns exist on feed_sources
+        try:
+            await conn.execute(text("ALTER TABLE feed_sources ADD COLUMN etag VARCHAR(255);"))
+        except Exception:
+            pass
+        try:
+            await conn.execute(text("ALTER TABLE feed_sources ADD COLUMN last_modified VARCHAR(255);"))
+        except Exception:
+            pass
+
+        # SQLite FTS5 setup (external content table + triggers + backfill)
+        if settings.DATABASE_URL.startswith("sqlite"):
+            try:
+                await conn.execute(text("""
+                    CREATE VIRTUAL TABLE IF NOT EXISTS articles_fts USING fts5(
+                        title,
+                        summary,
+                        content,
+                        content='articles',
+                        content_rowid='rowid'
+                    );
+                """))
+                await conn.execute(text("""
+                    CREATE TRIGGER IF NOT EXISTS articles_ai AFTER INSERT ON articles BEGIN
+                        INSERT INTO articles_fts(rowid, title, summary, content) 
+                        VALUES (new.rowid, new.title, coalesce(new.summary, ''), coalesce(new.content, ''));
+                    END;
+                """))
+                await conn.execute(text("""
+                    CREATE TRIGGER IF NOT EXISTS articles_ad AFTER DELETE ON articles BEGIN
+                        INSERT INTO articles_fts(articles_fts, rowid, title, summary, content) 
+                        VALUES ('delete', old.rowid, old.title, coalesce(old.summary, ''), coalesce(old.content, ''));
+                    END;
+                """))
+                await conn.execute(text("""
+                    CREATE TRIGGER IF NOT EXISTS articles_au AFTER UPDATE OF title, summary, content ON articles BEGIN
+                        INSERT INTO articles_fts(articles_fts, rowid, title, summary, content) 
+                        VALUES ('delete', old.rowid, old.title, coalesce(old.summary, ''), coalesce(old.content, ''));
+                        INSERT INTO articles_fts(rowid, title, summary, content) 
+                        VALUES (new.rowid, new.title, coalesce(new.summary, ''), coalesce(new.content, ''));
+                    END;
+                """))
+                # Idempotent backfill: rebuild FTS index from articles
+                await conn.execute(text("INSERT INTO articles_fts(articles_fts) VALUES('rebuild');"))
+                logger.info("SQLite FTS5 index verified/rebuilt successfully.")
+            except Exception as e:
+                logger.warning(f"SQLite FTS5 setup skipped or failed: {e}")
 
 
 
