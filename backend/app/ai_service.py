@@ -66,7 +66,7 @@ class AIService:
         text: str,
         model_override: Optional[str] = None,
         discussion_posts: Optional[List[Dict[str, Any]]] = None
-    ) -> str:
+    ) -> Optional[str]:
         """
         Generates high-value Chinese summary with TL;DR, 3 bullet takeaways and target audience.
         If discussion_posts are present (forum topic), incorporates community replies & consensus.
@@ -102,7 +102,7 @@ class AIService:
 """
         messages = [{"role": "user", "content": prompt}]
         res = await self._call_llm(model, messages, temperature=0.2, max_tokens=700)
-        return res or "摘要生成失败或超时，请参考原文。"
+        return res
 
     async def ask_article(
         self,

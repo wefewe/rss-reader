@@ -9,6 +9,7 @@ import urllib.parse
 import httpx
 import xml.etree.ElementTree as ET
 from typing import Optional, List, Dict, Any
+import bleach
 from fastapi import APIRouter, Depends, HTTPException, Query, Body, Request, UploadFile, File
 from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -59,6 +60,52 @@ from .ai_service import ai_service
 from .auth import require_auth, create_auth_token, verify_auth_token, TOKEN_VALIDITY_SECONDS
 from .config import settings
 import asyncio
+
+BLEACH_ALLOWED_TAGS = [
+    'p', 'br', 'span', 'div', 'hr',
+    'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+    'strong', 'b', 'em', 'i', 'u', 's', 'del', 'ins', 'mark', 'sub', 'sup',
+    'a', 'img',
+    'ul', 'ol', 'li',
+    'blockquote', 'aside',
+    'code', 'pre', 'kbd',
+    'table', 'thead', 'tbody', 'tfoot', 'tr', 'th', 'td'
+]
+
+BLEACH_ALLOWED_ATTRIBUTES = {
+    '*': ['class', 'title'],
+    'a': ['href', 'title', 'rel', 'target'],
+    'img': ['src', 'alt', 'title', 'width', 'height', 'loading'],
+    'th': ['align', 'colspan', 'rowspan'],
+    'td': ['align', 'colspan', 'rowspan'],
+}
+
+BLEACH_ALLOWED_PROTOCOLS = ['http', 'https', 'mailto']
+
+def sanitize_post_html(raw_html: str) -> str:
+    if not raw_html:
+        return ""
+    return bleach.clean(
+        raw_html,
+        tags=BLEACH_ALLOWED_TAGS,
+        attributes=BLEACH_ALLOWED_ATTRIBUTES,
+        protocols=BLEACH_ALLOWED_PROTOCOLS,
+        strip=True,
+        strip_comments=True
+    )
+
+def sanitize_discussion_posts(posts: Optional[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+    if not posts:
+        return []
+    cleaned = []
+    for p in posts:
+        if not isinstance(p, dict):
+            continue
+        p_copy = dict(p)
+        if "content_html" in p_copy and p_copy["content_html"]:
+            p_copy["content_html"] = sanitize_post_html(str(p_copy["content_html"]))
+        cleaned.append(p_copy)
+    return cleaned
 
 logger = logging.getLogger("rss_reader.api")
 
@@ -547,7 +594,7 @@ async def ingest_external_feed(data: IngestExternalFeedInput, db: AsyncSession =
             if not url:
                 continue
             pub_at = parse_date(item.published_at)
-            posts = item.discussion_posts or []
+            posts = sanitize_discussion_posts(item.discussion_posts or [])
             posts_cnt = len(posts) + 1
 
             existing_stage = await db.get(ForumStagingTopic, url)
@@ -612,6 +659,7 @@ async def ingest_external_feed(data: IngestExternalFeedInput, db: AsyncSession =
         if not existing:
             # For forum entries, OP post text is the primary content
             op_content = item.content or item.summary or ""
+            cleaned_posts = sanitize_discussion_posts(item.discussion_posts or [])
             art = Article(
                 id=art_id,
                 source_id=source_id,
@@ -624,7 +672,7 @@ async def ingest_external_feed(data: IngestExternalFeedInput, db: AsyncSession =
                 content=op_content if op_content else None,
                 published_at=pub_at,
                 image_url=item.image_url,
-                discussion_posts=item.discussion_posts or [],
+                discussion_posts=cleaned_posts,
                 value_tier="general",
                 value_score=0.6,
                 rank_score=0.6,
@@ -634,7 +682,7 @@ async def ingest_external_feed(data: IngestExternalFeedInput, db: AsyncSession =
         else:
             # Rule 8.2: discussion_posts is full replacement if provided
             if item.discussion_posts is not None:
-                existing.discussion_posts = item.discussion_posts
+                existing.discussion_posts = sanitize_discussion_posts(item.discussion_posts)
             if item.summary:
                 existing.summary = item.summary
             if item.content:
@@ -644,16 +692,28 @@ async def ingest_external_feed(data: IngestExternalFeedInput, db: AsyncSession =
             if item.image_url:
                 existing.image_url = item.image_url
 
-    # Rule 8.3: 50-article retention protection
+    # Rule 8.3: 50-article retention protection (excluding starred and highlighted articles)
     stmt = select(Article.id).where(Article.source_id == source_id).order_by(desc(Article.published_at))
     res = await db.execute(stmt)
     all_ids = [row[0] for row in res.fetchall()]
 
     if len(all_ids) > 50:
         candidates = all_ids[50:]
-        to_delete = [aid for aid in candidates if aid not in current_batch_ids]
-        if to_delete:
-            await db.execute(delete(Article).where(Article.id.in_(to_delete)))
+        to_check = [aid for aid in candidates if aid not in current_batch_ids]
+        if to_check:
+            protected_res = await db.execute(
+                select(Article.id).where(
+                    Article.id.in_(to_check),
+                    or_(
+                        Article.is_starred == True,
+                        Article.id.in_(select(ArticleHighlight.article_id))
+                    )
+                )
+            )
+            protected_ids = set(protected_res.scalars().all())
+            to_delete = [aid for aid in to_check if aid not in protected_ids]
+            if to_delete:
+                await db.execute(delete(Article).where(Article.id.in_(to_delete)))
 
     source.last_checked_at = datetime.datetime.utcnow()
     source.last_success_at = datetime.datetime.utcnow()
@@ -730,6 +790,9 @@ async def summarize_article_endpoint(body: ActionIDInput, db: AsyncSession = Dep
         discussion_posts=article.discussion_posts or []
     )
 
+    if not ai_summary:
+        raise HTTPException(status_code=502, detail="摘要生成失败或模型服务超时，未修改原摘要")
+
     article.summary = ai_summary
     # Ensure OP content is preserved in article.content for forum posts
     if not article.content and text_to_summarize and text_to_summarize != article.title:
@@ -741,11 +804,10 @@ async def summarize_article_endpoint(body: ActionIDInput, db: AsyncSession = Dep
 
 # 7. generatedailybrief
 @router.post("/generatedailybrief")
-async def generate_daily_brief_endpoint():
+async def generate_daily_brief_endpoint(db: AsyncSession = Depends(get_db)):
     await run_daily_brief_job()
-    async with async_session() as db:
-        res = await db.execute(select(DigestRecord).order_by(desc(DigestRecord.id)).limit(1))
-        latest = res.scalars().first()
+    res = await db.execute(select(DigestRecord).order_by(desc(DigestRecord.id)).limit(1))
+    latest = res.scalars().first()
     return {"status": "ok", "brief": DigestRecordSchema.model_validate(latest) if latest else None}
 
 # 8. analyzefeed
@@ -1043,6 +1105,10 @@ async def delete_source(body: DeleteSourceInput, db: AsyncSession = Depends(get_
     source = await db.get(FeedSource, body.id)
     if not source:
         raise HTTPException(status_code=404, detail="订阅源未找到")
+
+    # Clean up highlights belonging to articles of this source (avoid orphan highlights)
+    source_article_ids = select(Article.id).where(Article.source_id == body.id)
+    await db.execute(delete(ArticleHighlight).where(ArticleHighlight.article_id.in_(source_article_ids)))
 
     # Delete all associated articles
     await db.execute(delete(Article).where(Article.source_id == body.id))

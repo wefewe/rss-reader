@@ -8,9 +8,9 @@ import httpx
 import trafilatura
 from bs4 import BeautifulSoup
 from dateutil import parser as date_parser
-from sqlalchemy import select, delete, func, desc, update
+from sqlalchemy import select, delete, func, desc, update, or_
 from .database import async_session
-from .models import FeedSource, Article, ReaderPreference, DigestRecord, ForumStagingTopic
+from .models import FeedSource, Article, ReaderPreference, DigestRecord, ForumStagingTopic, ArticleHighlight
 from .default_feeds import DEFAULT_FEED_SOURCES
 from .ai_service import ai_service
 from .config import settings
@@ -240,7 +240,7 @@ async def fetch_single_feed(source: FeedSource):
                     if not existing_article.image_url and entry_img:
                         existing_article.image_url = entry_img
 
-            # Rule 8.3: 50-article retention protection
+            # Rule 8.3: 50-article retention protection (excluding starred and highlighted articles)
             # Find all articles for this source ordered by published_at DESC
             stmt = select(Article.id).where(Article.source_id == source_id).order_by(desc(Article.published_at))
             res = await session.execute(stmt)
@@ -249,9 +249,21 @@ async def fetch_single_feed(source: FeedSource):
             if len(all_ids) > 50:
                 # Articles eligible for pruning: those beyond top 50 AND not in current_batch_ids
                 candidates = all_ids[50:]
-                to_delete = [aid for aid in candidates if aid not in current_batch_ids]
-                if to_delete:
-                    await session.execute(delete(Article).where(Article.id.in_(to_delete)))
+                to_check = [aid for aid in candidates if aid not in current_batch_ids]
+                if to_check:
+                    protected_res = await session.execute(
+                        select(Article.id).where(
+                            Article.id.in_(to_check),
+                            or_(
+                                Article.is_starred == True,
+                                Article.id.in_(select(ArticleHighlight.article_id))
+                            )
+                        )
+                    )
+                    protected_ids = set(protected_res.scalars().all())
+                    to_delete = [aid for aid in to_check if aid not in protected_ids]
+                    if to_delete:
+                        await session.execute(delete(Article).where(Article.id.in_(to_delete)))
 
             # Update stats
             count_res = await session.execute(select(func.count(Article.id)).where(Article.source_id == source_id))
@@ -350,7 +362,8 @@ async def enrich_new_articles(articles: list):
                     db_a.triage_reason = triage.get("reason", "")
                     db_a.triage_signals = triage.get("signals", [])
                     db_a.rank_score = triage.get("rank_score", 0.5)
-                    db_a.summary = ai_sum # Update with rich structured summary!
+                    if ai_sum:
+                        db_a.summary = ai_sum # Update with rich structured summary!
                     await session.commit()
         except Exception as e:
             logger.warning(f"Error enriching article {a.title}: {e}")

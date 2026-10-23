@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import DOMPurify from 'dompurify';
 import { MessageSquare, User, Clock, ChevronDown, ChevronUp } from 'lucide-react';
 import { DiscussionPost } from '../types';
 
@@ -69,7 +70,7 @@ export const DiscussionPosts: React.FC<DiscussionPostsProps> = ({ posts }) => {
             {post.content_html ? (
               <div 
                 className="text-xs text-textPrimary/90 leading-relaxed prose prose-sm max-w-none break-words"
-                dangerouslySetInnerHTML={{ __html: post.content_html }}
+                dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(post.content_html) }}
               />
             ) : (
               <p className="text-xs text-textPrimary/90 leading-relaxed whitespace-pre-wrap break-words">

@@ -214,7 +214,7 @@ export async function forwardTelegram(id: string): Promise<string> {
 }
 
 export async function downloadOpmlExport(): Promise<void> {
-  const token = localStorage.getItem('reader_token');
+  const token = getAuthToken();
   const headers: Record<string, string> = {};
   if (token) headers['Authorization'] = `Bearer ${token}`;
 
@@ -236,7 +236,7 @@ export async function importOpmlFile(file: File): Promise<{
   skipped_count: number;
   new_sources: string[];
 }> {
-  const token = localStorage.getItem('reader_token');
+  const token = getAuthToken();
   const headers: Record<string, string> = {};
   if (token) headers['Authorization'] = `Bearer ${token}`;
 
