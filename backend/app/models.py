@@ -29,6 +29,7 @@ class FeedSource(Base):
     last_error = Column(Text, nullable=True)
     etag = Column(String(255), nullable=True)
     last_modified = Column(String(255), nullable=True)
+    consecutive_failures = Column(Integer, default=0)
 
 class Article(Base):
     __tablename__ = "articles"
@@ -70,15 +71,6 @@ class Article(Base):
 
     # Discussions (for LINUX DO or comments)
     discussion_posts = Column(JSON, default=list) # [{post_number, author, posted_at, content, content_html}]
-
-class ArticleImage(Base):
-    __tablename__ = "article_images"
-
-    id = Column(String(500), primary_key=True)
-    article_id = Column(String(1000), nullable=False, index=True)
-    url = Column(Text, nullable=False)
-    blob_data = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
 class ReaderPreference(Base):
     __tablename__ = "reader_preferences"

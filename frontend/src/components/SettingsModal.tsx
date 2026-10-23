@@ -466,18 +466,25 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
                 <div className="divide-y divide-surfaceBorder/60 border border-surfaceBorder rounded-xl bg-surfaceRaised/40 overflow-hidden">
                   {sources.map((s) => {
-                    const isError = s.status === 'error' || !!s.last_error;
+                    const isDisabled = s.status === 'disabled';
+                    const isError = s.status === 'error' || (!isDisabled && !!s.last_error);
                     const isDeleting = deletingSourceId === s.id;
                     return (
                       <div key={s.id} className="p-3 hover:bg-surfaceRaised/80 transition-colors flex items-center justify-between gap-3">
                         <div className="min-w-0 flex-1 space-y-1">
                           <div className="flex items-center gap-2 flex-wrap">
-                            <span className={`w-2 h-2 rounded-full shrink-0 ${isError ? 'bg-accentRed animate-pulse' : 'bg-accentGreen'}`} />
+                            <span className={`w-2 h-2 rounded-full shrink-0 ${isDisabled ? 'bg-accentRed ring-2 ring-accentRed/40' : isError ? 'bg-accentRed animate-pulse' : 'bg-accentGreen'}`} />
                             <span className="font-semibold text-textPrimary truncate">{s.title}</span>
                             <span className="text-[10px] px-1.5 py-0.5 rounded bg-surface border border-surfaceBorder text-textMuted">
                               {s.group_name}
                             </span>
-                            {isError && (
+                            {isDisabled && (
+                              <span className="text-[10px] px-1.5 py-0.2 rounded bg-accentRed/30 text-accentRed border border-accentRed/50 flex items-center gap-1 font-semibold">
+                                <AlertCircle size={10} />
+                                已停用熔断 ({s.consecutive_failures || 10}次连续失败)
+                              </span>
+                            )}
+                            {isError && !isDisabled && (
                               <span className="text-[10px] px-1.5 py-0.2 rounded bg-accentRed/20 text-accentRed border border-accentRed/30 flex items-center gap-1">
                                 <AlertCircle size={10} />
                                 抓取异常

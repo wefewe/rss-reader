@@ -2,13 +2,14 @@ import logging
 import datetime
 import asyncio
 import re
+import urllib.parse
 from typing import Any, Optional, List, Dict
 import feedparser
 import httpx
 import trafilatura
 from bs4 import BeautifulSoup
 from dateutil import parser as date_parser
-from sqlalchemy import select, delete, func, desc, update, or_
+from sqlalchemy import select, delete, func, desc, update, or_, and_
 from .database import async_session
 from .models import FeedSource, Article, ReaderPreference, DigestRecord, ForumStagingTopic, ArticleHighlight
 from .default_feeds import DEFAULT_FEED_SOURCES
@@ -33,6 +34,40 @@ def debuzz_title(raw_title: str) -> str:
         cleaned = re.sub(pat, "", cleaned, flags=re.IGNORECASE)
     cleaned = cleaned.strip()
     return cleaned if cleaned else raw_title
+
+def normalize_url(url: str) -> str:
+    """
+    Normalizes article URL for deduplication:
+    - Strips utm_* and other common tracking parameters (spm, fbclid, gclid, etc.)
+    - Normalizes trailing slashes (strips trailing slash for non-root paths)
+    - Lowercases scheme and hostname
+    - Strips fragment (#...)
+    """
+    if not url:
+        return ""
+    try:
+        parts = urllib.parse.urlsplit(url.strip())
+        if not parts.scheme or not parts.netloc:
+            return url.strip()
+
+        query_pairs = urllib.parse.parse_qsl(parts.query, keep_blank_values=True)
+        filtered_pairs = [
+            (k, v) for k, v in query_pairs
+            if not k.lower().startswith("utm_") and k.lower() not in ("spm", "fbclid", "gclid", "ref", "from_source")
+        ]
+        new_query = urllib.parse.urlencode(filtered_pairs)
+
+        path = parts.path
+        if len(path) > 1 and path.endswith("/"):
+            path = path.rstrip("/")
+
+        scheme = parts.scheme.lower()
+        netloc = parts.netloc.lower()
+
+        clean_url = urllib.parse.urlunsplit((scheme, netloc, path, new_query, ""))
+        return clean_url
+    except Exception:
+        return url.strip()
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 RSSReader/1.0",
@@ -178,8 +213,15 @@ def _sync_parse_feed(content: bytes) -> tuple[list, Optional[str]]:
         )
         published_at = parse_date(pub_date)
 
+        guid = (entry.get("id") or entry.get("guid") or "").strip()
+        if guid.startswith(("http://", "https://")):
+            guid = normalize_url(guid)
+        norm_url = normalize_url(url)
+
         parsed_items.append({
-            "url": url,
+            "url": norm_url,
+            "raw_url": url,
+            "guid": guid,
             "title": title,
             "clean_title": debuzz_title(title),
             "summary": summary,
@@ -220,37 +262,72 @@ async def fetch_single_feed(
         logger.info(f"Checking feed: {source_title} ({source.feed_url})")
         return await http_client.get(source.feed_url, headers=req_headers)
 
-    try:
-        if sem:
-            async with sem:
+    retry_delays = [30, 120]
+    resp = None
+    last_exc = None
+
+    for attempt in range(len(retry_delays) + 1):
+        try:
+            if sem:
+                async with sem:
+                    if client:
+                        resp = await _do_http_get(client)
+                    else:
+                        async with httpx.AsyncClient(headers=HEADERS, timeout=20.0, follow_redirects=True, verify=False) as c:
+                            resp = await _do_http_get(c)
+            else:
                 if client:
                     resp = await _do_http_get(client)
                 else:
                     async with httpx.AsyncClient(headers=HEADERS, timeout=20.0, follow_redirects=True, verify=False) as c:
                         resp = await _do_http_get(c)
-        else:
-            if client:
-                resp = await _do_http_get(client)
+
+            if resp.status_code >= 400:
+                raise Exception(f"HTTP {resp.status_code} {resp.reason_phrase}")
+
+            last_exc = None
+            break
+        except Exception as e:
+            last_exc = e
+            if attempt < len(retry_delays):
+                delay = retry_delays[attempt]
+                logger.warning(f"Fetch attempt {attempt + 1} failed for {source_title} ({source.feed_url}): {e}. Retrying in {delay}s...")
+                await asyncio.sleep(delay)
             else:
-                async with httpx.AsyncClient(headers=HEADERS, timeout=20.0, follow_redirects=True, verify=False) as c:
-                    resp = await _do_http_get(c)
+                logger.error(f"All {len(retry_delays) + 1} attempts failed for {source_title} ({source.feed_url}): {e}")
 
-        # Handle 304 Not Modified: skip parsing and enrichment entirely
-        if resp.status_code == 304:
-            logger.info(f"304 Not Modified for {source_title} ({source.feed_url}) - skipping parsing and enrichment")
-            async with async_session() as session:
-                db_source = await session.get(FeedSource, source_id)
-                if db_source:
-                    db_source.last_checked_at = datetime.datetime.utcnow()
-                    db_source.last_success_at = datetime.datetime.utcnow()
-                    db_source.last_error = None
-                    db_source.status = "active"
-                    await session.commit()
-            return
+    if last_exc is not None:
+        async with async_session() as session:
+            db_source = await session.get(FeedSource, source_id)
+            if db_source:
+                db_source.last_checked_at = datetime.datetime.utcnow()
+                db_source.last_error = str(last_exc)
+                db_source.consecutive_failures = (db_source.consecutive_failures or 0) + 1
+                if db_source.consecutive_failures >= 10:
+                    db_source.status = "disabled"
+                    logger.warning(
+                        f"Feed {source_title} reached {db_source.consecutive_failures} consecutive failures. Auto-disabling feed."
+                    )
+                else:
+                    db_source.status = "error"
+                await session.commit()
+        return
 
-        if resp.status_code >= 400:
-            raise Exception(f"HTTP {resp.status_code} {resp.reason_phrase}")
+    # Handle 304 Not Modified: skip parsing and enrichment entirely
+    if resp.status_code == 304:
+        logger.info(f"304 Not Modified for {source_title} ({source.feed_url}) - skipping parsing and enrichment")
+        async with async_session() as session:
+            db_source = await session.get(FeedSource, source_id)
+            if db_source:
+                db_source.last_checked_at = datetime.datetime.utcnow()
+                db_source.last_success_at = datetime.datetime.utcnow()
+                db_source.last_error = None
+                db_source.consecutive_failures = 0
+                db_source.status = "active"
+                await session.commit()
+        return
 
+    try:
         content = resp.content
         new_etag = resp.headers.get("etag")
         new_last_modified = resp.headers.get("last-modified")
@@ -276,12 +353,30 @@ async def fetch_single_feed(
                 db_source.last_modified = new_last_modified
 
             for item in parsed_items:
-                url = item["url"]
-                article_id = f"{source_id}\n{url}"
-                current_batch_ids.add(article_id)
+                norm_url = item["url"]
+                raw_url = item.get("raw_url", norm_url)
+                guid = item.get("guid")
+                item_key = guid if guid else norm_url
+                article_id = f"{source_id}\n{item_key}"
 
+                # 既有文章不回溯改键，避免重复入库
                 existing_article = await session.get(Article, article_id)
+                if not existing_article and guid:
+                    old_id_norm = f"{source_id}\n{norm_url}"
+                    existing_article = await session.get(Article, old_id_norm)
+                    if not existing_article and raw_url != norm_url:
+                        old_id_raw = f"{source_id}\n{raw_url}"
+                        existing_article = await session.get(Article, old_id_raw)
                 if not existing_article:
+                    stmt_match = select(Article).where(
+                        Article.source_id == source_id,
+                        or_(Article.url == norm_url, Article.url == raw_url)
+                    ).limit(1)
+                    res_match = await session.execute(stmt_match)
+                    existing_article = res_match.scalars().first()
+
+                if not existing_article:
+                    current_batch_ids.add(article_id)
                     art = Article(
                         id=article_id,
                         source_id=source_id,
@@ -289,7 +384,7 @@ async def fetch_single_feed(
                         group_name=group_name,
                         title=item["title"],
                         clean_title=item["clean_title"],
-                        url=url,
+                        url=norm_url,
                         summary=item["summary"],
                         content=item["content"],
                         image_url=item["image_url"],
@@ -303,6 +398,7 @@ async def fetch_single_feed(
                     session.add(art)
                     new_articles.append(art)
                 else:
+                    current_batch_ids.add(existing_article.id)
                     # Update summary/content/image if empty
                     if not existing_article.summary and item["summary"]:
                         existing_article.summary = item["summary"]
@@ -347,6 +443,7 @@ async def fetch_single_feed(
             db_source.unread_count = unread_res.scalar() or 0
             db_source.last_success_at = datetime.datetime.utcnow()
             db_source.last_error = None
+            db_source.consecutive_failures = 0
             db_source.status = "active"
 
             await session.commit()
@@ -356,13 +453,20 @@ async def fetch_single_feed(
             asyncio.create_task(enrich_new_articles(new_articles))
 
     except Exception as e:
-        logger.error(f"Error fetching feed {source_title}: {e}")
+        logger.error(f"Error parsing/saving feed {source_title}: {e}")
         async with async_session() as session:
             db_source = await session.get(FeedSource, source_id)
             if db_source:
                 db_source.last_checked_at = datetime.datetime.utcnow()
                 db_source.last_error = str(e)
-                db_source.status = "error"
+                db_source.consecutive_failures = (db_source.consecutive_failures or 0) + 1
+                if db_source.consecutive_failures >= 10:
+                    db_source.status = "disabled"
+                    logger.warning(
+                        f"Feed {source_title} reached {db_source.consecutive_failures} consecutive failures. Auto-disabling feed."
+                    )
+                else:
+                    db_source.status = "error"
                 await session.commit()
 
 async def enrich_new_articles(articles: list):
@@ -437,11 +541,68 @@ async def enrich_new_articles(articles: list):
         except Exception as e:
             logger.warning(f"Error enriching article {a.title}: {e}")
 
+async def cleanup_forum_staging_topics() -> int:
+    """
+    Cleans up expired forum staging topics:
+    - is_consumed=True and scraped_at older than 7 days
+    - unconsumed (is_consumed=False or NULL) and scraped_at older than 30 days
+    Logs the count before deletion.
+    If count > 1000 in a single run, skips deletion and logs an alert.
+    """
+    now = datetime.datetime.utcnow()
+    cutoff_consumed = now - datetime.timedelta(days=7)
+    cutoff_unconsumed = now - datetime.timedelta(days=30)
+
+    async with async_session() as session:
+        cond = or_(
+            and_(ForumStagingTopic.is_consumed == True, ForumStagingTopic.scraped_at < cutoff_consumed),
+            and_(or_(ForumStagingTopic.is_consumed == False, ForumStagingTopic.is_consumed.is_(None)), ForumStagingTopic.scraped_at < cutoff_unconsumed)
+        )
+        count_stmt = select(func.count(ForumStagingTopic.id)).where(cond)
+        count_res = await session.execute(count_stmt)
+        to_delete_count = count_res.scalar() or 0
+
+        logger.info(f"[StagingCleanup] Found {to_delete_count} expired forum staging topics to clean up.")
+        if to_delete_count > 1000:
+            logger.warning(
+                f"[StagingCleanup] Abnormal staging topics cleanup count: {to_delete_count} > 1000. Skipping deletion for safety and logging alert."
+            )
+            return to_delete_count
+
+        if to_delete_count > 0:
+            del_stmt = delete(ForumStagingTopic).where(cond)
+            await session.execute(del_stmt)
+            await session.commit()
+            logger.info(f"[StagingCleanup] Successfully deleted {to_delete_count} expired forum staging topics.")
+
+        return to_delete_count
+
+
+async def cleanup_digest_records(days: int = 90) -> int:
+    """
+    Purges digest records older than specified retention days (default 90 days).
+    """
+    cutoff = datetime.datetime.utcnow() - datetime.timedelta(days=days)
+    async with async_session() as session:
+        count_stmt = select(func.count(DigestRecord.id)).where(DigestRecord.created_at < cutoff)
+        count_res = await session.execute(count_stmt)
+        to_delete_count = count_res.scalar() or 0
+
+        logger.info(f"[DigestCleanup] Found {to_delete_count} digest records older than {days} days to clean up.")
+        if to_delete_count > 0:
+            del_stmt = delete(DigestRecord).where(DigestRecord.created_at < cutoff)
+            await session.execute(del_stmt)
+            await session.commit()
+            logger.info(f"[DigestCleanup] Successfully purged {to_delete_count} digest records older than {days} days.")
+        return to_delete_count
+
+
 async def refresh_all_feeds():
-    """Refreshes all feeds asynchronously with concurrency semaphore and reused AsyncClient."""
+    """Refreshes all active feeds asynchronously with concurrency semaphore and reused AsyncClient."""
     logger.info("Starting background refresh of all feeds...")
     async with async_session() as session:
-        stmt = select(FeedSource)
+        # Exclude feeds that have been auto-disabled (consecutive_failures >= 10)
+        stmt = select(FeedSource).where(FeedSource.status != "disabled")
         res = await session.execute(stmt)
         sources = res.scalars().all()
 
@@ -450,6 +611,12 @@ async def refresh_all_feeds():
         tasks = [fetch_single_feed(s, client=client, sem=sem) for s in sources]
         await asyncio.gather(*tasks, return_exceptions=True)
     logger.info("All feeds refreshed.")
+
+    # Lifecycle cleanup of staging topics
+    try:
+        await cleanup_forum_staging_topics()
+    except Exception as e:
+        logger.error(f"Error during forum staging topics cleanup: {e}")
 
 async def run_daily_brief_job():
     """Generates 09:00 morning brief and optionally pushes to Telegram."""
@@ -519,6 +686,12 @@ async def run_daily_brief_job():
         }
         await ai_service.push_telegram_notification(tg_text, parse_mode="HTML", reply_markup=reply_markup)
         logger.info("09:00 Daily Briefing generated and stored.")
+
+        # Purge digest records older than 90 days
+        try:
+            await cleanup_digest_records(90)
+        except Exception as e:
+            logger.error(f"Error cleaning up old digest records: {e}")
 
 async def generate_forum_digest_job(edition: Optional[str] = None) -> Optional[Article]:
     """

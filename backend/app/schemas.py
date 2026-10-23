@@ -105,6 +105,7 @@ class FeedSourceSchema(BaseModel):
     last_error: Optional[str] = None
     etag: Optional[str] = None
     last_modified: Optional[str] = None
+    consecutive_failures: int = 0
 
     class Config:
         from_attributes = True
@@ -139,6 +140,7 @@ class GetArticleInput(BaseModel):
 class IngestEntry(BaseModel):
     title: str
     url: str
+    guid: Optional[str] = None
     published_at: Optional[str] = None
     summary: Optional[str] = None
     content: Optional[str] = None

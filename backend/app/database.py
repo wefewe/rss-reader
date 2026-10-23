@@ -73,6 +73,16 @@ async def init_db():
             await conn.execute(text("ALTER TABLE feed_sources ADD COLUMN last_modified VARCHAR(255);"))
         except Exception:
             pass
+        # Migration: ensure consecutive_failures column exists on feed_sources
+        try:
+            await conn.execute(text("ALTER TABLE feed_sources ADD COLUMN consecutive_failures INTEGER DEFAULT 0;"))
+        except Exception:
+            pass
+        # Migration: DROP dead table article_images (verified zero references across codebase)
+        try:
+            await conn.execute(text("DROP TABLE IF EXISTS article_images;"))
+        except Exception:
+            pass
 
         # SQLite FTS5 setup (external content table + triggers + backfill)
         if settings.DATABASE_URL.startswith("sqlite"):

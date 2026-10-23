@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import defer
 from sqlalchemy import select, update, delete, desc, func, or_, and_, cast, String, text, literal_column
 from .database import get_db
-from .models import FeedSource, Article, ReaderPreference, DigestRecord, ArticleImage, ArticleHighlight, ForumStagingTopic
+from .models import FeedSource, Article, ReaderPreference, DigestRecord, ArticleHighlight, ForumStagingTopic
 from .schemas import (
     ListReaderResponse,
     ArticleSchema,
@@ -56,6 +56,9 @@ from .feed_crawler import (
     run_daily_brief_job,
     debuzz_title,
     generate_forum_digest_job,
+    normalize_url,
+    cleanup_forum_staging_topics,
+    cleanup_digest_records,
 )
 from .content_extractor import extract_fulltext_from_url
 from .ai_service import ai_service
@@ -693,9 +696,10 @@ async def ingest_external_feed(data: IngestExternalFeedInput, db: AsyncSession =
     if "linux.do" in feed_url or "linuxdo" in feed_url:
         staged_count = 0
         for item in data.entries:
-            url = item.url.strip()
-            if not url:
+            raw_url = item.url.strip()
+            if not raw_url:
                 continue
+            url = normalize_url(raw_url)
             pub_at = parse_date(item.published_at)
             posts = sanitize_discussion_posts(item.discussion_posts or [])
             posts_cnt = len(posts) + 1
@@ -735,9 +739,12 @@ async def ingest_external_feed(data: IngestExternalFeedInput, db: AsyncSession =
                 existing_stage.scraped_at = datetime.datetime.utcnow()
                 staged_count += 1
 
-        # Retain last 7 days of staging topics, purge older
-        cutoff_7d = datetime.datetime.utcnow() - datetime.timedelta(days=7)
-        await db.execute(delete(ForumStagingTopic).where(ForumStagingTopic.scraped_at < cutoff_7d))
+        # Periodic lifecycle cleanup of staging topics
+        try:
+            await cleanup_forum_staging_topics()
+        except Exception as e:
+            logger.error(f"Error during forum staging topics cleanup: {e}")
+
         await db.commit()
         return {
             "status": "ok",
@@ -750,16 +757,37 @@ async def ingest_external_feed(data: IngestExternalFeedInput, db: AsyncSession =
     newly_added = []
 
     for item in data.entries:
-        url = item.url.strip()
-        if not url:
+        raw_url = item.url.strip()
+        if not raw_url:
             continue
-        art_id = f"{source_id}\n{url}"
-        current_batch_ids.add(art_id)
+        norm_url = normalize_url(raw_url)
+        guid = (getattr(item, "guid", None) or "").strip()
+        if guid.startswith(("http://", "https://")):
+            guid = normalize_url(guid)
+
+        item_key = guid if guid else norm_url
+        art_id = f"{source_id}\n{item_key}"
+
+        # 既有文章不回溯改键，避免重复入库
+        existing = await db.get(Article, art_id)
+        if not existing and guid:
+            old_id_norm = f"{source_id}\n{norm_url}"
+            existing = await db.get(Article, old_id_norm)
+            if not existing and raw_url != norm_url:
+                old_id_raw = f"{source_id}\n{raw_url}"
+                existing = await db.get(Article, old_id_raw)
+        if not existing:
+            stmt_match = select(Article).where(
+                Article.source_id == source_id,
+                or_(Article.url == norm_url, Article.url == raw_url)
+            ).limit(1)
+            res_match = await db.execute(stmt_match)
+            existing = res_match.scalars().first()
 
         pub_at = parse_date(item.published_at)
-        existing = await db.get(Article, art_id)
 
         if not existing:
+            current_batch_ids.add(art_id)
             # For forum entries, OP post text is the primary content
             op_content = item.content or item.summary or ""
             cleaned_posts = sanitize_discussion_posts(item.discussion_posts or [])
@@ -770,7 +798,7 @@ async def ingest_external_feed(data: IngestExternalFeedInput, db: AsyncSession =
                 group_name=group_name,
                 title=item.title.strip(),
                 clean_title=debuzz_title(item.title.strip()),
-                url=url,
+                url=norm_url,
                 summary=item.summary or "",
                 content=op_content if op_content else None,
                 published_at=pub_at,
@@ -783,6 +811,7 @@ async def ingest_external_feed(data: IngestExternalFeedInput, db: AsyncSession =
             db.add(art)
             newly_added.append(art)
         else:
+            current_batch_ids.add(existing.id)
             # Rule 8.2: discussion_posts is full replacement if provided
             if item.discussion_posts is not None:
                 existing.discussion_posts = sanitize_discussion_posts(item.discussion_posts)
