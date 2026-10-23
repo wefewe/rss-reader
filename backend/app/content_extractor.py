@@ -143,7 +143,7 @@ def _sync_parse_and_extract(html: str, url: str) -> dict:
             "error": None,
         }
 
-    # Fallback to simple soup extraction (retain images as markdown)
+    # Fallback to simple soup extraction (retain images and structure as markdown)
     body = soup.find("article") or soup.find("main") or soup.find("body")
     if body:
         for tag in body(["script", "style", "noscript", "nav", "footer", "header"]):
@@ -153,6 +153,56 @@ def _sync_parse_and_extract(html: str, url: str) -> dict:
             if src:
                 alt = img.get("alt") or "image"
                 img.replace_with(f"\n\n![{alt}]({src})\n\n")
+
+        # Convert code blocks
+        for pre in body.find_all("pre"):
+            code = pre.find("code")
+            classes = []
+            if pre.get("class"):
+                classes.extend(pre.get("class"))
+            if code and code.get("class"):
+                classes.extend(code.get("class"))
+            lang = ""
+            for c in classes:
+                m = re.search(r"(?:language|lang)-(\w+)", str(c))
+                if m:
+                    lang = m.group(1)
+                    break
+            code_text = (code.get_text() if code else pre.get_text()).strip("\r\n")
+            pre.replace_with(f"\n\n```{lang}\n{code_text}\n```\n\n")
+
+        for code in body.find_all("code"):
+            if not code.parent:
+                continue
+            c_text = code.get_text().strip()
+            if c_text and "\n" not in c_text:
+                code.replace_with(f" `{c_text}` ")
+            elif c_text:
+                code.replace_with(f"\n\n```\n{c_text}\n```\n\n")
+
+        for tag, prefix in [("h1", "# "), ("h2", "## "), ("h3", "### "), ("h4", "#### "), ("h5", "##### "), ("h6", "###### ")]:
+            for h in body.find_all(tag):
+                h_text = h.get_text().strip()
+                if h_text:
+                    h.replace_with(f"\n\n{prefix}{h_text}\n\n")
+                else:
+                    h.decompose()
+
+        for bq in body.find_all("blockquote"):
+            lines = [line.strip() for line in bq.get_text().split("\n") if line.strip()]
+            if lines:
+                bq.replace_with(f"\n\n> {' '.join(lines)}\n\n")
+            else:
+                bq.decompose()
+
+        for a in body.find_all("a"):
+            href = a.get("href")
+            a_text = a.get_text().strip()
+            if href and a_text and not href.startswith("javascript:"):
+                a.replace_with(f" [{a_text}]({href}) ")
+            elif a_text:
+                a.replace_with(a_text)
+
         for br in body.find_all("br"):
             br.replace_with("\n")
         text = body.get_text(separator="\n").strip()

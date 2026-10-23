@@ -1,7 +1,7 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { formatDistanceToNow, parseISO } from 'date-fns';
 import { zhCN } from 'date-fns/locale';
-import { Star, ThumbsUp, ThumbsDown, MessageSquare, Flame, Layers } from 'lucide-react';
+import { Star, ThumbsUp, ThumbsDown, MessageSquare, Flame, Layers, ChevronDown, ChevronUp } from 'lucide-react';
 import { Article } from '../types';
 
 interface ArticleCardProps {
@@ -25,6 +25,7 @@ export const ArticleCard: React.FC<ArticleCardProps> = ({
   relatedArticles,
   onSelectRelated,
 }) => {
+  const [isClusterExpanded, setIsClusterExpanded] = useState<boolean>(true);
   const timeAgo = React.useMemo(() => {
     try {
       return formatDistanceToNow(parseISO(article.published_at), { addSuffix: true, locale: zhCN });
@@ -181,30 +182,39 @@ export const ArticleCard: React.FC<ArticleCardProps> = ({
         </div>
       </div>
 
-      {/* Story Cluster sub-list */}
+      {/* Story Cluster sub-list with collapsible interaction */}
       {relatedArticles && relatedArticles.length > 0 && (
         <div 
           className="mt-2 pt-2 border-t border-surfaceBorder/50 space-y-1.5" 
           onClick={(e) => e.stopPropagation()}
         >
-          <div className="flex items-center justify-between text-[10px] text-textMuted">
+          <div 
+            className="flex items-center justify-between text-[10px] text-textMuted cursor-pointer hover:text-textPrimary transition-colors select-none py-0.5"
+            onClick={() => setIsClusterExpanded(!isClusterExpanded)}
+            title={isClusterExpanded ? "收起同题报道" : "展开同题报道"}
+          >
             <span className="font-semibold text-accent flex items-center gap-1">
               <Layers size={11} />
               多源同题报道 ({relatedArticles.length}篇):
             </span>
+            <button className="text-textMuted hover:text-textPrimary p-0.5 rounded">
+              {isClusterExpanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+            </button>
           </div>
-          <div className="space-y-1">
-            {relatedArticles.map((rel) => (
-              <div
-                key={rel.id}
-                onClick={() => onSelectRelated && onSelectRelated(rel)}
-                className="flex items-center justify-between p-1 px-1.5 rounded bg-surfaceRaised/60 hover:bg-surfaceRaised text-[10px] cursor-pointer text-textMuted hover:text-textPrimary transition-colors"
-              >
-                <span className="truncate max-w-[200px]">{rel.title}</span>
-                <span className="shrink-0 text-textMuted/60 font-mono">[{rel.source_title}]</span>
-              </div>
-            ))}
-          </div>
+          {isClusterExpanded && (
+            <div className="space-y-1">
+              {relatedArticles.map((rel) => (
+                <div
+                  key={rel.id}
+                  onClick={() => onSelectRelated && onSelectRelated(rel)}
+                  className="flex items-center justify-between p-1 px-1.5 rounded bg-surfaceRaised/60 hover:bg-surfaceRaised text-[10px] cursor-pointer text-textMuted hover:text-textPrimary transition-colors"
+                >
+                  <span className="truncate max-w-[200px]">{rel.title}</span>
+                  <span className="shrink-0 text-textMuted/60 font-mono">[{rel.source_title}]</span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>

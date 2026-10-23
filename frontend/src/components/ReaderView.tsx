@@ -8,25 +8,31 @@ import {
   Flame, 
   RefreshCw, 
   CheckCircle2, 
-  Circle,
-  ThumbsUp,
-  ThumbsDown,
-  Info,
-  ArrowLeft,
-  Maximize2,
-  Minimize2,
-  Type,
-  Copy,
-  Check,
-  X,
-  BookOpen,
-  Send,
-  Languages,
-  Headphones,
-  Volume2,
-  Play,
-  Pause,
-  MessageSquare
+  Circle, 
+  ThumbsUp, 
+  ThumbsDown, 
+  Info, 
+  ArrowLeft, 
+  Maximize2, 
+  Minimize2, 
+  Type, 
+  Copy, 
+  Check, 
+  X, 
+  BookOpen, 
+  Send, 
+  Languages, 
+  Headphones, 
+  Volume2, 
+  Play, 
+  Pause, 
+  MessageSquare,
+  ArrowUp,
+  ListTree,
+  ChevronDown,
+  ChevronUp,
+  Terminal,
+  Columns
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { Article } from '../types';
@@ -78,19 +84,30 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
   const [isSendingTg, setIsSendingTg] = useState<boolean>(false);
   const [tgSentSuccess, setTgSentSuccess] = useState<boolean>(false);
 
-  // Typography settings with localStorage persistence
+  // Typography & Layout settings with localStorage persistence
   const [fontSize, setFontSize] = useState<number>(() => {
     return Number(localStorage.getItem('reader_fontsize')) || 16;
   });
   const [fontFamily, setFontFamily] = useState<'sans' | 'serif'>(() => {
     return (localStorage.getItem('reader_fontfamily') as 'sans' | 'serif') || 'sans';
   });
-  const [lineHeight, setLineHeight] = useState<'normal' | 'relaxed'>(() => {
-    return (localStorage.getItem('reader_lineheight') as 'normal' | 'relaxed') || 'normal';
+  const [lineHeight, setLineHeight] = useState<'tight' | 'normal' | 'relaxed'>(() => {
+    const saved = localStorage.getItem('reader_lineheight');
+    if (saved === 'tight' || saved === 'normal' || saved === 'relaxed') return saved;
+    return 'normal';
+  });
+  const [contentWidth, setContentWidth] = useState<'compact' | 'standard' | 'wide'>(() => {
+    const saved = localStorage.getItem('reader_contentwidth');
+    if (saved === 'compact' || saved === 'standard' || saved === 'wide') return saved;
+    return 'standard';
   });
   const [isBionicReading, setIsBionicReading] = useState<boolean>(() => {
     return localStorage.getItem('reader_bionic_reading') === 'true';
   });
+
+  // Reading auxiliary features: Back-to-top & TOC
+  const [showBackToTop, setShowBackToTop] = useState<boolean>(false);
+  const [isTocOpen, setIsTocOpen] = useState<boolean>(true);
 
   // Bilingual flow state (Follow 工作流)
   const [isBilingualMode, setIsBilingualMode] = useState<boolean>(false);
@@ -207,6 +224,10 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
   }, [lineHeight]);
 
   useEffect(() => {
+    localStorage.setItem('reader_contentwidth', contentWidth);
+  }, [contentWidth]);
+
+  useEffect(() => {
     localStorage.setItem('reader_bionic_reading', String(isBionicReading));
   }, [isBionicReading]);
 
@@ -222,6 +243,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
       progressTextRef.current.textContent = '0%';
     }
     setActiveLightboxImg(null);
+    setShowBackToTop(false);
   }, [article?.id]);
 
   const handleScroll = () => {
@@ -239,6 +261,11 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     if (progressTextRef.current) {
       progressTextRef.current.textContent = `${percent}%`;
     }
+    setShowBackToTop(scrollTop > clientHeight);
+  };
+
+  const handleScrollToTop = () => {
+    scrollContainerRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const scrollToSection = (keyword: string) => {
@@ -252,6 +279,95 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     }
   };
 
+  const contentWidthClass = useMemo(() => {
+    switch (contentWidth) {
+      case 'compact':
+        return 'w-full max-w-full md:max-w-[620px]';
+      case 'wide':
+        return 'w-full max-w-full md:max-w-[840px]';
+      case 'standard':
+      default:
+        return 'w-full max-w-full md:max-w-[700px]';
+    }
+  }, [contentWidth]);
+
+  const getHeadingText = (children: any): string => {
+    if (typeof children === 'string') return children;
+    if (Array.isArray(children)) {
+      return children.map(getHeadingText).join('');
+    }
+    if (children && typeof children === 'object' && children.props?.children) {
+      return getHeadingText(children.props.children);
+    }
+    return '';
+  };
+
+  const slugify = (text: string): string => {
+    return 'h-' + text.toLowerCase().replace(/[^\w\u4e00-\u9fa5]+/g, '-').replace(/^-+|-+$/g, '');
+  };
+
+  // Custom code component for codeblocks and inline code
+  const CodeBlockComponent = ({ inline, className, children, ...props }: any) => {
+    const [copied, setCopied] = useState(false);
+    const match = /language-(\w+)/.exec(className || '');
+    const language = match ? match[1] : '';
+    const rawCode = String(children || '').replace(/\n$/, '');
+
+    const handleCopy = (e: React.MouseEvent) => {
+      e.stopPropagation();
+      navigator.clipboard.writeText(rawCode).then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      });
+    };
+
+    const isInline = inline || (!language && !rawCode.includes('\n') && rawCode.length < 80);
+
+    if (isInline) {
+      return (
+        <code 
+          className="font-mono text-[0.875em] px-1.5 py-0.5 rounded-md bg-surfaceRaised/80 border border-surfaceBorder/60 text-textPrimary inline-block mx-0.5 select-text" 
+          {...props}
+        >
+          {children}
+        </code>
+      );
+    }
+
+    return (
+      <div className="my-4 rounded-xl border border-surfaceBorder bg-surfaceRaised/60 shadow-2xs overflow-hidden group">
+        <div className="flex items-center justify-between px-3 py-1.5 bg-surfaceRaised/90 border-b border-surfaceBorder/60 text-[11px] text-textMuted select-none">
+          <div className="flex items-center gap-1.5 font-mono">
+            <Terminal size={12} className="text-accent" />
+            <span>{language || 'code'}</span>
+          </div>
+          <button
+            onClick={handleCopy}
+            className="flex items-center gap-1 px-2 py-0.5 rounded-md hover:bg-surface hover:text-textPrimary transition-colors"
+            title="复制代码"
+          >
+            {copied ? (
+              <>
+                <Check size={11} className="text-accentGreen" />
+                <span className="text-accentGreen font-medium">已复制</span>
+              </>
+            ) : (
+              <>
+                <Copy size={11} />
+                <span>复制</span>
+              </>
+            )}
+          </button>
+        </div>
+        <pre className="p-3.5 sm:p-4 overflow-x-auto text-xs leading-relaxed font-mono text-textPrimary/95 bg-transparent m-0 select-text">
+          <code className="bg-transparent p-0 border-0 text-inherit font-inherit">
+            {rawCode}
+          </code>
+        </pre>
+      </div>
+    );
+  };
+
   // Stable markdown components definition to prevent re-mounting during re-renders
   const markdownComponents = useMemo(() => ({
     p: ({ children }: any) => {
@@ -260,6 +376,26 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
         return <p className="mb-4 leading-relaxed">{formatBionicContent(children)}</p>;
       }
       return <p className="mb-4 leading-relaxed">{children}</p>;
+    },
+    code: CodeBlockComponent,
+    pre: ({ children }: any) => <>{children}</>,
+    h2: ({ children, ...props }: any) => {
+      const text = getHeadingText(children).trim();
+      const id = slugify(text);
+      return (
+        <h2 id={id} className="text-lg font-bold text-textPrimary mt-7 mb-3 scroll-mt-14" {...props}>
+          {children}
+        </h2>
+      );
+    },
+    h3: ({ children, ...props }: any) => {
+      const text = getHeadingText(children).trim();
+      const id = slugify(text);
+      return (
+        <h3 id={id} className="text-base font-semibold text-textPrimary mt-5 mb-2 scroll-mt-14" {...props}>
+          {children}
+        </h3>
+      );
     },
     img: ({ src, alt }: any) => (
       <SafeImage
@@ -308,6 +444,52 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
   );
 
   const effectiveContent = article?.content || (isForumTopic ? article?.summary : null);
+
+  // TOC extracted from article headings (>= 3 headings, excluding linuxdo-digest)
+  const tocItems = useMemo(() => {
+    if (!effectiveContent || article?.source_id === 'linuxdo-digest') return [];
+    const items: { id: string; text: string; level: number }[] = [];
+    const lines = effectiveContent.split('\n');
+    let inCode = false;
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (trimmed.startsWith('```')) {
+        inCode = !inCode;
+        continue;
+      }
+      if (inCode) continue;
+
+      const mdMatch = trimmed.match(/^(#{2,3})\s+(.+)$/);
+      if (mdMatch) {
+        const level = mdMatch[1].length;
+        const cleanText = mdMatch[2].replace(/[*_`]/g, '').replace(/\[([^\]]+)\]\([^\)]+\)/g, '$1').trim();
+        if (cleanText) {
+          items.push({ id: slugify(cleanText), text: cleanText, level });
+        }
+        continue;
+      }
+
+      const htmlMatch = trimmed.match(/<h([23])[^>]*>(.*?)<\/h\1>/i);
+      if (htmlMatch) {
+        const level = parseInt(htmlMatch[1], 10);
+        const cleanText = htmlMatch[2].replace(/<[^>]+>/g, '').trim();
+        if (cleanText) {
+          items.push({ id: slugify(cleanText), text: cleanText, level });
+        }
+      }
+    }
+
+    return items.length >= 3 ? items : [];
+  }, [effectiveContent, article?.source_id]);
+
+  const scrollToHeading = (id: string) => {
+    if (!scrollContainerRef.current) return;
+    const target = scrollContainerRef.current.querySelector(`#${id}`);
+    if (target) {
+      target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  };
 
   const handleCopyMarkdown = () => {
     if (!article) return;
@@ -433,7 +615,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
             {/* Typography Dropdown Popover */}
             {isTypographyOpen && (
               <div 
-                className="absolute right-0 top-full mt-2 w-64 p-3.5 rounded-xl bg-surface border border-surfaceBorder shadow-2xl z-50 space-y-3 text-xs select-none"
+                className="absolute right-0 top-full mt-2 w-72 p-4 rounded-xl bg-surface border border-surfaceBorder shadow-2xl z-50 space-y-3.5 text-xs select-none"
                 onClick={e => e.stopPropagation()}
               >
                 <div className="flex items-center justify-between border-b border-surfaceBorder/60 pb-2">
@@ -481,6 +663,50 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
                     >
                       思源宋体 (Serif)
                     </button>
+                  </div>
+                </div>
+
+                {/* Content Column Width */}
+                <div className="space-y-1.5">
+                  <span className="text-[11px] text-textMuted">正文列宽</span>
+                  <div className="flex items-center justify-between bg-surfaceRaised p-1 rounded-lg border border-surfaceBorder">
+                    {([
+                      { key: 'compact', label: '紧凑 (620)' },
+                      { key: 'standard', label: '标准 (700)' },
+                      { key: 'wide', label: '宽松 (840)' }
+                    ] as const).map(item => (
+                      <button
+                        key={item.key}
+                        onClick={() => setContentWidth(item.key)}
+                        className={`flex-1 py-1 rounded text-[11px] font-medium transition-colors ${
+                          contentWidth === item.key ? 'bg-accent text-white shadow-xs' : 'text-textMuted hover:text-textPrimary'
+                        }`}
+                      >
+                        {item.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Line Height */}
+                <div className="space-y-1.5">
+                  <span className="text-[11px] text-textMuted">行高间距</span>
+                  <div className="flex items-center justify-between bg-surfaceRaised p-1 rounded-lg border border-surfaceBorder">
+                    {([
+                      { key: 'tight', label: '紧凑 (1.6)' },
+                      { key: 'normal', label: '标准 (1.8)' },
+                      { key: 'relaxed', label: '宽松 (2.1)' }
+                    ] as const).map(item => (
+                      <button
+                        key={item.key}
+                        onClick={() => setLineHeight(item.key)}
+                        className={`flex-1 py-1 rounded text-[11px] font-medium transition-colors ${
+                          lineHeight === item.key ? 'bg-accent text-white shadow-xs' : 'text-textMuted hover:text-textPrimary'
+                        }`}
+                      >
+                        {item.label}
+                      </button>
+                    ))}
                   </div>
                 </div>
 
@@ -626,9 +852,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
       >
         <div
           key={article.id}
-          className={`mx-auto space-y-6 transition-all duration-200 ${
-            isZenMode ? 'max-w-2xl' : 'max-w-3xl'
-          }`}
+          className={`mx-auto space-y-6 transition-all duration-200 ${contentWidthClass}`}
         >
           {/* Article Header & Meta */}
           <div className="space-y-3 pb-6 border-b border-surfaceBorder">
@@ -776,6 +1000,44 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
             </div>
           )}
 
+          {/* Article Table of Contents (TOC) for structured long-read articles */}
+          {tocItems.length >= 3 && (
+            <div className="p-3.5 sm:p-4 rounded-2xl bg-surfaceRaised/40 border border-surfaceBorder/80 shadow-2xs select-none space-y-2.5">
+              <div 
+                className="flex items-center justify-between cursor-pointer group"
+                onClick={() => setIsTocOpen(!isTocOpen)}
+              >
+                <div className="flex items-center gap-2 text-xs font-semibold text-textPrimary">
+                  <ListTree size={15} className="text-accent" />
+                  <span>文章目录</span>
+                  <span className="text-[10px] font-mono font-normal text-textMuted bg-surfaceRaised px-1.5 py-0.5 rounded border border-surfaceBorder/50">
+                    {tocItems.length} 个小节
+                  </span>
+                </div>
+                <button className="text-textMuted group-hover:text-textPrimary transition-colors p-1 rounded-md hover:bg-surfaceRaised">
+                  {isTocOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                </button>
+              </div>
+
+              {isTocOpen && (
+                <div className="pt-2 border-t border-surfaceBorder/50 space-y-1 text-xs">
+                  {tocItems.map((item, idx) => (
+                    <div
+                      key={idx}
+                      onClick={() => scrollToHeading(item.id)}
+                      className={`cursor-pointer text-textMuted hover:text-accent transition-colors flex items-center gap-1.5 py-1 px-1.5 rounded-lg hover:bg-surfaceRaised/80 truncate ${
+                        item.level === 3 ? 'pl-5 text-[11px]' : 'font-medium'
+                      }`}
+                    >
+                      <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${item.level === 3 ? 'bg-textMuted/40' : 'bg-accent/70'}`} />
+                      <span className="truncate">{item.text}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Main Article Content with custom typography styles */}
           <article 
             className={`pt-2 text-textPrimary/90 space-y-4 ${
@@ -783,7 +1045,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
             }`}
             style={{ 
               fontSize: `${fontSize}px`, 
-              lineHeight: lineHeight === 'relaxed' ? 2.0 : 1.75 
+              lineHeight: lineHeight === 'tight' ? 1.6 : lineHeight === 'relaxed' ? 2.1 : 1.8 
             }}
           >
             {isBilingualMode && (
@@ -933,6 +1195,17 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
             </button>
           </div>
         </div>
+      )}
+
+      {/* 6. Floating Back to Top Button */}
+      {showBackToTop && (
+        <button
+          onClick={handleScrollToTop}
+          className="fixed sm:absolute bottom-6 right-6 z-40 p-2.5 rounded-full bg-surface/90 hover:bg-surfaceRaised backdrop-blur-md border border-surfaceBorder hover:border-accent text-textMuted hover:text-accent shadow-xl transition-all duration-200 cursor-pointer animate-in fade-in zoom-in-95"
+          title="回到顶部"
+        >
+          <ArrowUp size={16} />
+        </button>
       )}
     </main>
   );

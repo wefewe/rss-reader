@@ -130,6 +130,69 @@ def extract_rich_content_and_image(raw_html: str):
         else:
             img.decompose()
 
+    # Convert code blocks (<pre><code> / <pre>) before text extraction
+    for pre in soup.find_all("pre"):
+        code = pre.find("code")
+        classes = []
+        if pre.get("class"):
+            classes.extend(pre.get("class"))
+        if code and code.get("class"):
+            classes.extend(code.get("class"))
+        lang = ""
+        for c in classes:
+            m = re.search(r"(?:language|lang)-(\w+)", str(c))
+            if m:
+                lang = m.group(1)
+                break
+        code_text = (code.get_text() if code else pre.get_text()).strip("\r\n")
+        pre.replace_with(f"\n\n```{lang}\n{code_text}\n```\n\n")
+
+    # Convert standalone inline <code> tags
+    for code in soup.find_all("code"):
+        if not code.parent:
+            continue
+        c_text = code.get_text().strip()
+        if c_text and "\n" not in c_text:
+            code.replace_with(f" `{c_text}` ")
+        elif c_text:
+            code.replace_with(f"\n\n```\n{c_text}\n```\n\n")
+
+    # Convert headings h1-h6
+    for tag, prefix in [("h1", "# "), ("h2", "## "), ("h3", "### "), ("h4", "#### "), ("h5", "##### "), ("h6", "###### ")]:
+        for h in soup.find_all(tag):
+            h_text = h.get_text().strip()
+            if h_text:
+                h.replace_with(f"\n\n{prefix}{h_text}\n\n")
+            else:
+                h.decompose()
+
+    # Convert blockquotes
+    for bq in soup.find_all("blockquote"):
+        lines = [line.strip() for line in bq.get_text().split("\n") if line.strip()]
+        if lines:
+            bq.replace_with(f"\n\n> {' '.join(lines)}\n\n")
+        else:
+            bq.decompose()
+
+    # Convert hyperlinks
+    for a in soup.find_all("a"):
+        href = a.get("href")
+        a_text = a.get_text().strip()
+        if href and a_text and not href.startswith("javascript:"):
+            a.replace_with(f" [{a_text}]({href}) ")
+        elif a_text:
+            a.replace_with(a_text)
+
+    # Convert list items
+    for li in soup.find_all("li"):
+        li_text = li.get_text().strip()
+        if li_text:
+            li.replace_with(f"\n- {li_text}\n")
+
+    # Convert horizontal rules
+    for hr in soup.find_all("hr"):
+        hr.replace_with("\n\n---\n\n")
+
     for br in soup.find_all("br"):
         br.replace_with("\n")
     for p in soup.find_all("p"):

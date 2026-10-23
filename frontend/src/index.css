@@ -77,11 +77,15 @@
   color: #2f81f7;
   text-decoration: underline;
 }
+.theme-sepia .prose a {
+  color: #a05a1c;
+}
 .prose code {
   color: var(--color-text-primary);
   background: var(--color-surface-raised);
   padding: 0.15em 0.35em;
   border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
 }
 .prose pre {
   background: var(--color-surface-raised);
@@ -89,6 +93,15 @@
   border: 1px solid var(--color-surface-border);
   border-radius: 8px;
   padding: 1rem;
+  overflow-x: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  line-height: 1.5;
+}
+.prose pre code {
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+  color: inherit;
 }
 .prose blockquote {
   border-left: 3px solid var(--color-surface-border);

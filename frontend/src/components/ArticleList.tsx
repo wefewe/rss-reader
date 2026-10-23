@@ -246,8 +246,9 @@ export const ArticleList: React.FC<ArticleListProps> = ({
               className={`px-2 py-0.5 rounded-md font-medium transition-colors ${
                 filterTier === 'normal' ? 'bg-surfaceRaised text-textPrimary' : 'text-textMuted hover:text-textPrimary'
               }`}
+              title={isClustered && clusteredItems.length !== filteredArticles.length && tierCounts ? `已聚合为 ${clusteredItems.length} 个报道主题，包含 ${tierCounts.normal} 篇关联文章` : undefined}
             >
-              推荐 {tierCounts ? `(${tierCounts.normal})` : ''}
+              推荐 {tierCounts ? (isClustered && clusteredItems.length !== filteredArticles.length && filterTier === 'normal' ? `(${clusteredItems.length}组 · ${tierCounts.normal}篇)` : `(${tierCounts.normal})`) : ''}
             </button>
             <button
               onClick={() => onFilterTierChange('featured')}
@@ -262,6 +263,7 @@ export const ArticleList: React.FC<ArticleListProps> = ({
               className={`px-2 py-0.5 rounded-md font-medium transition-colors ${
                 filterTier === 'hidden' ? 'bg-surfaceRaised text-textMuted' : 'text-textMuted/60 hover:text-textMuted'
               }`}
+              title={tierCounts && tierCounts.hidden === 0 ? "当前视图无被折叠的低价值内容" : undefined}
             >
               折叠 {tierCounts ? `(${tierCounts.hidden})` : ''}
             </button>
@@ -299,7 +301,11 @@ export const ArticleList: React.FC<ArticleListProps> = ({
         {clusteredItems.length === 0 ? (
           <div className="p-8 text-center text-textMuted text-xs flex flex-col items-center justify-center gap-2 h-64">
             <SlidersHorizontal size={24} className="opacity-30" />
-            <p>暂无符合当前筛选条件的文章</p>
+            <p>
+              {filterTier === 'hidden' 
+                ? '暂无被系统折叠的低价值内容（点击上方「推荐」即可切回正常流）' 
+                : '暂无符合当前筛选条件的文章'}
+            </p>
           </div>
         ) : (
           <>
