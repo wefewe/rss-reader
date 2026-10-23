@@ -1,12 +1,32 @@
 import os
+import secrets
+from typing import List
 from pydantic_settings import BaseSettings
+
+_env_secret_key = os.getenv("SECRET_KEY", "").strip()
+_is_secret_generated = False
+if not _env_secret_key:
+    _env_secret_key = secrets.token_urlsafe(32)
+    _is_secret_generated = True
 
 class Settings(BaseSettings):
     HOST: str = "0.0.0.0"
     PORT: int = 8000
     DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite+aiosqlite:////data/reader.db")
-    SECRET_KEY: str = os.getenv("SECRET_KEY", "rss_reader_secret_key")
+    SECRET_KEY: str = _env_secret_key
+    IS_SECRET_KEY_GENERATED: bool = _is_secret_generated
     
+    # CORS White-list
+    READER_CORS_ORIGINS: str = os.getenv(
+        "READER_CORS_ORIGINS",
+        "https://reader.cwsub.indevs.in,http://localhost:5173,http://localhost:8000,http://127.0.0.1:5173,http://127.0.0.1:8000"
+    )
+
+    @property
+    def cors_origins_list(self) -> List[str]:
+        raw = self.READER_CORS_ORIGINS or ""
+        return [item.strip() for item in raw.split(",") if item.strip()]
+
     # Authentication
     READER_PASSWORD: str = os.getenv("READER_PASSWORD", "")
     READER_API_KEY: str = os.getenv("READER_API_KEY", "")

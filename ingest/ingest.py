@@ -256,10 +256,17 @@ async def run_ingest_cycle():
     watermark = load_watermark()
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+        browser = await p.chromium.launch(
+            headless=True,
+            args=["--disable-blink-features=AutomationControlled", "--no-sandbox"]
         )
+        context_kwargs = {
+            "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+            "viewport": {"width": 1280, "height": 800}
+        }
+        if os.path.exists(STORAGE_STATE_FILE):
+            context_kwargs["storage_state"] = STORAGE_STATE_FILE
+        context = await browser.new_context(**context_kwargs)
         
         await context.add_cookies([
             {
@@ -273,26 +280,41 @@ async def run_ingest_cycle():
             }
         ])
 
-        # Warmup and session validation
+        # Warmup and session validation with Turnstile auto-solve
         page = await context.new_page()
         try:
-            resp = await page.goto("https://linux.do", wait_until="domcontentloaded", timeout=20000)
-            title = await page.title()
-            logger.info(f"Connected to LINUX DO: {title}")
+            await page.goto("https://linux.do", timeout=30000)
+            passed = False
+            for attempt in range(12):
+                await asyncio.sleep(2)
+                title = await page.title()
+                if "LINUX DO" in title and "Just a moment" not in title:
+                    logger.info(f"Connected to LINUX DO: {title} (Resolved in {attempt*2}s)")
+                    passed = True
+                    break
+                for f in page.frames:
+                    if "cloudflare" in f.url or "challenges" in f.url:
+                        try:
+                            box = f.locator("input[type=checkbox], .ctp-checkbox-label, body")
+                            if await box.count() > 0:
+                                await box.first.click()
+                        except Exception:
+                            pass
 
-            # Check if session is expired (e.g. redirected to login or title is '登录')
-            if "login" in page.url.lower() or "登录" in title or "LINUX DO" not in title:
-                logger.error(f"Session expired or blocked! URL={page.url}, Title={title}")
-                await send_telegram_alert(f"⚠️ [RSS Ingest] LINUX DO 登录会话已失效 (URL: {page.url})，请及时更新 Cookie 凭证！")
-                await page.close()
-                await browser.close()
-                return
+            if not passed:
+                title = await page.title()
+                if "login" in page.url.lower() or "登录" in title or "LINUX DO" not in title:
+                    logger.error(f"Session expired or blocked! URL={page.url}, Title={title}")
+                    await send_telegram_alert(f"⚠️ [RSS Ingest] LINUX DO 登录会话已失效 (URL: {page.url})，请及时更新 Cookie 凭证！")
+                    await page.close()
+                    await browser.close()
+                    return
 
+            await context.storage_state(path=STORAGE_STATE_FILE)
         except Exception as e:
             logger.warning(f"Warmup warning: {e}")
         finally:
             await page.close()
-
         for feed in FEEDS:
             entries = await crawl_feed(context, feed, watermark)
             if entries:

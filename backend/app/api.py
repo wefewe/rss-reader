@@ -68,7 +68,14 @@ from .feed_crawler import (
 )
 from .content_extractor import extract_fulltext_from_url
 from .ai_service import ai_service
-from .auth import require_auth, create_auth_token, verify_auth_token, TOKEN_VALIDITY_SECONDS
+from .auth import (
+    require_auth,
+    create_auth_token,
+    verify_auth_token,
+    TOKEN_VALIDITY_SECONDS,
+    login_limiter,
+    get_client_ip,
+)
 from .config import settings
 import asyncio
 
@@ -128,14 +135,30 @@ router = APIRouter(prefix="/api/reader", tags=["reader"], dependencies=[Depends(
 
 # --- Authentication Endpoints (Public) ---
 @public_router.post("/auth/login")
-async def auth_login(body: LoginInput):
+async def auth_login(request: Request, body: LoginInput):
     if not settings.READER_PASSWORD:
         return {"status": "ok", "token": "no_auth_required", "expires_in": TOKEN_VALIDITY_SECONDS}
+
+    client_ip = get_client_ip(request)
+    is_locked, remaining_seconds = login_limiter.check_rate_limit(client_ip)
+    if is_locked:
+        minutes = max(1, (remaining_seconds + 59) // 60)
+        raise HTTPException(
+            status_code=429,
+            detail=f"登录失败次数过多，该 IP 已被锁定，请在 {minutes} 分钟后再试"
+        )
     
     if body.password == settings.READER_PASSWORD:
+        login_limiter.record_success(client_ip)
         token = create_auth_token()
         return {"status": "ok", "token": token, "expires_in": TOKEN_VALIDITY_SECONDS}
     
+    is_locked, remaining_seconds = login_limiter.record_failure(client_ip)
+    if is_locked:
+        raise HTTPException(
+            status_code=429,
+            detail="连续 5 次密码错误，该 IP 已被锁定 10 分钟"
+        )
     raise HTTPException(status_code=401, detail="密码错误，请重新输入")
 
 @public_router.get("/auth/check")

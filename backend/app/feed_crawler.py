@@ -18,6 +18,10 @@ from .config import settings
 
 logger = logging.getLogger("rss_reader.crawler")
 
+# Concurrency guards (R6 audit)
+_refresh_all_lock = asyncio.Lock()
+_enrich_semaphore = asyncio.Semaphore(2)
+
 CLICKBAIT_PATTERNS = [
     r"^【(?:突发|重磅|震惊|速看|提醒|重磅推荐|独家|大事件|官宣)】\s*",
     r"^\[(?:突发|重磅|震惊|速看|提醒|独家|官宣)\]\s*",
@@ -473,85 +477,90 @@ async def enrich_new_articles(articles: list):
     """
     Asynchronously runs full-text extraction (for summary-only feeds),
     AI triage and summary pre-computation for new articles.
+    Guarded by global _enrich_semaphore to avoid burst LLM / write conflicts.
     Ensures 0 latency when the user views the articles!
     """
-    from .content_extractor import extract_fulltext_from_url
+    if not articles:
+        return
 
-    auto_fetch_budget = 6  # bound per-batch network fetches
-    for a in articles[:10]: # Batch up to 10 to avoid bursting
-        try:
-            async with async_session() as session:
-                pref = await session.get(ReaderPreference, 1)
-                if pref and pref.pure_rule_mode:
-                    break # Skip AI in pure rule mode
+    async with _enrich_semaphore:
+        from .content_extractor import extract_fulltext_from_url
 
-                is_forum = a.source_id.startswith("linuxdo") or bool(a.discussion_posts) or "linux.do" in (a.url or "")
+        auto_fetch_budget = 6  # bound per-batch network fetches
+        for a in articles[:10]: # Batch up to 10 to avoid bursting
+            try:
+                async with async_session() as session:
+                    pref = await session.get(ReaderPreference, 1)
+                    if pref and pref.pure_rule_mode:
+                        break # Skip AI in pure rule mode
 
-                # 0. Auto-fetch full text for summary-only feeds (non-forum, no content yet)
-                if not is_forum and not a.content and auto_fetch_budget > 0 and a.url:
-                    short_summary = (a.summary or "").strip()
-                    if len(short_summary) < 600:
-                        auto_fetch_budget -= 1
-                        try:
-                            ft = await extract_fulltext_from_url(a.url)
-                            if ft and ft.get("content"):
-                                a.content = ft["content"]
-                                if ft.get("image_url") and not a.image_url:
-                                    a.image_url = ft["image_url"]
-                        except Exception as fe:
-                            logger.warning(f"Auto fulltext failed for {a.url}: {fe}")
+                    is_forum = a.source_id.startswith("linuxdo") or bool(a.discussion_posts) or "linux.do" in (a.url or "")
 
-                # Determine richest available text for AI enrichment
-                enrich_text = a.content or a.summary or ""
+                    # 0. Auto-fetch full text for summary-only feeds (non-forum, no content yet)
+                    if not is_forum and not a.content and auto_fetch_budget > 0 and a.url:
+                        short_summary = (a.summary or "").strip()
+                        if len(short_summary) < 600:
+                            auto_fetch_budget -= 1
+                            try:
+                                ft = await extract_fulltext_from_url(a.url)
+                                if ft and ft.get("content"):
+                                    a.content = ft["content"]
+                                    if ft.get("image_url") and not a.image_url:
+                                        a.image_url = ft["image_url"]
+                            except Exception as fe:
+                                logger.warning(f"Auto fulltext failed for {a.url}: {fe}")
 
-                # 1. AI Triage with multi-layer filtering
-                triage = await ai_service.triage_article(
-                    a.title,
-                    enrich_text,
-                    a.source_title,
-                    group_name=a.group_name,
-                    discussion_posts=a.discussion_posts or [],
-                    extra_meta={"source_id": a.source_id}
-                )
+                    # Determine richest available text for AI enrichment
+                    enrich_text = a.content or a.summary or ""
 
-                # 2. AI Summary
-                ai_sum = await ai_service.summarize_article(
-                    a.title,
-                    enrich_text,
-                    pref.summary_model if pref else None,
-                    discussion_posts=a.discussion_posts or []
-                )
+                    # 1. AI Triage with multi-layer filtering
+                    triage = await ai_service.triage_article(
+                        a.title,
+                        enrich_text,
+                        a.source_title,
+                        group_name=a.group_name,
+                        discussion_posts=a.discussion_posts or [],
+                        extra_meta={"source_id": a.source_id}
+                    )
 
-                # Re-fetch article to update
-                db_a = await session.get(Article, a.id)
-                if db_a:
-                    db_a.content = a.content or db_a.content
-                    db_a.image_url = a.image_url or db_a.image_url
-                    db_a.value_tier = triage.get("value_tier", "general")
-                    db_a.value_score = triage.get("value_score", 0.5)
-                    db_a.quality_score = triage.get("quality_score", 0.5)
-                    db_a.promotion_score = triage.get("promotion_score", 0.0)
-                    db_a.expiry_score = triage.get("expiry_score", 0.0)
-                    db_a.triage_reason = triage.get("reason", "")
-                    db_a.triage_signals = triage.get("signals", [])
-                    db_a.rank_score = triage.get("rank_score", 0.5)
-                    if ai_sum:
-                        db_a.summary = ai_sum # Update with rich structured summary!
-                    await session.commit()
-        except Exception as e:
-            logger.warning(f"Error enriching article {a.title}: {e}")
+                    # 2. AI Summary
+                    ai_sum = await ai_service.summarize_article(
+                        a.title,
+                        enrich_text,
+                        pref.summary_model if pref else None,
+                        discussion_posts=a.discussion_posts or []
+                    )
+
+                    # Re-fetch article to update
+                    db_a = await session.get(Article, a.id)
+                    if db_a:
+                        db_a.content = a.content or db_a.content
+                        db_a.image_url = a.image_url or db_a.image_url
+                        db_a.value_tier = triage.get("value_tier", "general")
+                        db_a.value_score = triage.get("value_score", 0.5)
+                        db_a.quality_score = triage.get("quality_score", 0.5)
+                        db_a.promotion_score = triage.get("promotion_score", 0.0)
+                        db_a.expiry_score = triage.get("expiry_score", 0.0)
+                        db_a.triage_reason = triage.get("reason", "")
+                        db_a.triage_signals = triage.get("signals", [])
+                        db_a.rank_score = triage.get("rank_score", 0.5)
+                        if ai_sum:
+                            db_a.summary = ai_sum # Update with rich structured summary!
+                        await session.commit()
+            except Exception as e:
+                logger.warning(f"Error enriching article {a.title}: {e}")
 
 async def cleanup_forum_staging_topics() -> int:
     """
     Cleans up expired forum staging topics:
     - is_consumed=True and scraped_at older than 7 days
-    - unconsumed (is_consumed=False or NULL) and scraped_at older than 30 days
+    - unconsumed (is_consumed=False or NULL) and scraped_at older than 7 days (owner decided 2026-10-23)
     Logs the count before deletion.
     If count > 1000 in a single run, skips deletion and logs an alert.
     """
     now = datetime.datetime.utcnow()
     cutoff_consumed = now - datetime.timedelta(days=7)
-    cutoff_unconsumed = now - datetime.timedelta(days=30)
+    cutoff_unconsumed = now - datetime.timedelta(days=7)
 
     async with async_session() as session:
         cond = or_(
@@ -598,25 +607,30 @@ async def cleanup_digest_records(days: int = 90) -> int:
 
 
 async def refresh_all_feeds():
-    """Refreshes all active feeds asynchronously with concurrency semaphore and reused AsyncClient."""
-    logger.info("Starting background refresh of all feeds...")
-    async with async_session() as session:
-        # Exclude feeds that have been auto-disabled (consecutive_failures >= 10) or user-paused
-        stmt = select(FeedSource).where(FeedSource.status.notin_(["disabled", "user_paused"]))
-        res = await session.execute(stmt)
-        sources = res.scalars().all()
+    """Refreshes all active feeds asynchronously with concurrency lock and reused AsyncClient."""
+    if _refresh_all_lock.locked():
+        logger.info("Feed refresh is already in progress, skipping duplicate trigger.")
+        return
 
-    sem = asyncio.Semaphore(5)
-    async with httpx.AsyncClient(headers=HEADERS, timeout=20.0, follow_redirects=True, verify=False) as client:
-        tasks = [fetch_single_feed(s, client=client, sem=sem) for s in sources]
-        await asyncio.gather(*tasks, return_exceptions=True)
-    logger.info("All feeds refreshed.")
+    async with _refresh_all_lock:
+        logger.info("Starting background refresh of all feeds...")
+        async with async_session() as session:
+            # Exclude feeds that have been auto-disabled (consecutive_failures >= 10) or user-paused
+            stmt = select(FeedSource).where(FeedSource.status.notin_(["disabled", "user_paused"]))
+            res = await session.execute(stmt)
+            sources = res.scalars().all()
 
-    # Lifecycle cleanup of staging topics
-    try:
-        await cleanup_forum_staging_topics()
-    except Exception as e:
-        logger.error(f"Error during forum staging topics cleanup: {e}")
+        sem = asyncio.Semaphore(5)
+        async with httpx.AsyncClient(headers=HEADERS, timeout=20.0, follow_redirects=True, verify=False) as client:
+            tasks = [fetch_single_feed(s, client=client, sem=sem) for s in sources]
+            await asyncio.gather(*tasks, return_exceptions=True)
+        logger.info("All feeds refreshed.")
+
+        # Lifecycle cleanup of staging topics
+        try:
+            await cleanup_forum_staging_topics()
+        except Exception as e:
+            logger.error(f"Error during forum staging topics cleanup: {e}")
 
 async def run_daily_brief_job():
     """Generates 09:00 morning brief and optionally pushes to Telegram."""

@@ -24,6 +24,13 @@ scheduler = AsyncIOScheduler(timezone=settings.TZ)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Initializing RSS Reader Backend...")
+
+    # Configuration security checks & warnings
+    if settings.IS_SECRET_KEY_GENERATED:
+        logger.warning("⚠️ [SECURITY WARNING] SECRET_KEY 未配置！已在内存中生成一次性随机密钥。服务重启将导致既有登录 Token 失效。生产环境请务必配置固定 SECRET_KEY 环境变量！")
+    if not settings.READER_PASSWORD:
+        logger.warning("⚠️ [SECURITY WARNING] READER_PASSWORD 为空！阅读器当前处于无密码公开访问状态，任何人均可查看与操作所有数据。建议尽快设置 READER_PASSWORD 环境变量！")
+
     await init_db()
     await init_default_sources()
 
@@ -73,10 +80,10 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="RSS Reader", version="1.0.0", lifespan=lifespan)
 
-# Allow CORS for development
+# Allow CORS for white-listed origins
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.cors_origins_list,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
