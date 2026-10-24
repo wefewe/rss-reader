@@ -53,3 +53,8 @@ class Settings(BaseSettings):
         extra = "ignore"
 
 settings = Settings()
+
+# WO-20261024-12: Backlog calculation rules (Rule 6)
+# Articles older than BACKLOG_THRESHOLD_DAYS, unread, unstarred, and in BACKLOG_VALUE_TIERS are considered backlog.
+BACKLOG_THRESHOLD_DAYS: int = 14
+BACKLOG_VALUE_TIERS: tuple = ("general", "hidden")

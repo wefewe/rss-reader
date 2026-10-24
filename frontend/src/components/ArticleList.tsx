@@ -10,13 +10,14 @@ interface ArticleListProps {
   onToggleStar: (articleId: string) => void;
   onFeedback: (articleId: string, feedback: 'like' | 'dislike') => void;
   onMarkAllRead: () => void;
+  onMarkBacklogRead?: () => void;
   onMarkBatchRead?: (articleIds: string[]) => void;
   searchQuery: string;
   onSearchChange: (query: string) => void;
   currentView: ViewType;
   filterTier: string;
   onFilterTierChange: (tier: string) => void;
-  tierCounts?: { normal: number; featured: number; hidden: number };
+  tierCounts?: { normal: number; featured: number; hidden: number; backlog?: number };
   currentSort?: 'rank' | 'time';
   onSortChange?: (sort: 'rank' | 'time') => void;
   onBackToSidebar?: () => void;
@@ -33,6 +34,7 @@ export const ArticleList: React.FC<ArticleListProps> = ({
   onToggleStar,
   onFeedback,
   onMarkAllRead,
+  onMarkBacklogRead,
   onMarkBatchRead,
   searchQuery,
   onSearchChange,
@@ -62,12 +64,13 @@ export const ArticleList: React.FC<ArticleListProps> = ({
     localStorage.setItem('reader_cluster', String(isClustered));
   }, [isClustered]);
 
-  // Filter by value tier (featured / all / hidden)
+  // Filter by value tier (featured / all / hidden / backlog)
   const filteredArticles = useMemo(() => {
     return articles.filter(a => {
       if (filterTier === 'featured') return a.value_tier === 'featured';
       if (filterTier === 'normal') return a.value_tier !== 'hidden';
       if (filterTier === 'hidden') return a.value_tier === 'hidden';
+      if (filterTier === 'backlog') return true;
       return a.value_tier !== 'hidden'; // Default: hide hidden low-value items unless explicitly selected
     });
   }, [articles, filterTier]);
@@ -153,6 +156,17 @@ export const ArticleList: React.FC<ArticleListProps> = ({
     if (onLoadMore && hasMore && !isLoadingMore) {
       if (target.scrollHeight - target.scrollTop - target.clientHeight < 160) {
         onLoadMore();
+      }
+    }
+  };
+
+  const handleConfirmMarkBacklogRead = () => {
+    const count = tierCounts?.backlog ?? articles.length;
+    if (window.confirm(`确定将当前全部 ${count} 篇积压文章标记为已读吗？\n\n此操作仅改变已读状态，文章仍会完整保存在数据库中，可在搜索中继续随时查阅。`)) {
+      if (onMarkBacklogRead) {
+        onMarkBacklogRead();
+      } else {
+        onMarkAllRead();
       }
     }
   };
@@ -267,10 +281,19 @@ export const ArticleList: React.FC<ArticleListProps> = ({
             >
               折叠 {tierCounts ? `(${tierCounts.hidden})` : ''}
             </button>
+            <button
+              onClick={() => onFilterTierChange('backlog')}
+              className={`px-2 py-0.5 rounded-md font-medium transition-colors ${
+                filterTier === 'backlog' ? 'bg-amber-500/20 text-amber-500 font-semibold' : 'text-textMuted/70 hover:text-textPrimary'
+              }`}
+              title={tierCounts?.backlog === 0 ? "暂无超过 14 天的积压未读内容" : "点击展开超过 14 天未读的积压内容"}
+            >
+              积压 {tierCounts && tierCounts.backlog !== undefined ? `(${tierCounts.backlog})` : ''}
+            </button>
           </div>
 
           <div className="flex items-center gap-1.5">
-            {unreadAboveIds.length > 0 && onMarkBatchRead && (
+            {unreadAboveIds.length > 0 && onMarkBatchRead && filterTier !== 'backlog' && (
               <button
                 onClick={() => onMarkBatchRead(unreadAboveIds)}
                 title={`标记当前文章上方的 ${unreadAboveIds.length} 篇未读为已读`}
@@ -281,14 +304,26 @@ export const ArticleList: React.FC<ArticleListProps> = ({
               </button>
             )}
 
-            <button
-              onClick={onMarkAllRead}
-              title="全部标为已读"
-              className="flex items-center gap-1 text-textMuted hover:text-accent transition-colors px-1.5 py-0.5 rounded hover:bg-surfaceRaised"
-            >
-              <CheckCheck size={13} />
-              <span>已读全部</span>
-            </button>
+            {filterTier === 'backlog' ? (
+              <button
+                onClick={handleConfirmMarkBacklogRead}
+                disabled={(tierCounts?.backlog || 0) === 0 && articles.length === 0}
+                title="全部积压标为已读（二次确认）"
+                className="flex items-center gap-1 text-amber-500 hover:text-amber-400 transition-colors px-1.5 py-0.5 rounded bg-amber-500/10 hover:bg-amber-500/20 font-medium disabled:opacity-40"
+              >
+                <CheckCheck size={13} />
+                <span>积压标已读</span>
+              </button>
+            ) : (
+              <button
+                onClick={onMarkAllRead}
+                title="全部标为已读"
+                className="flex items-center gap-1 text-textMuted hover:text-accent transition-colors px-1.5 py-0.5 rounded hover:bg-surfaceRaised"
+              >
+                <CheckCheck size={13} />
+                <span>已读全部</span>
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -298,12 +333,33 @@ export const ArticleList: React.FC<ArticleListProps> = ({
         onScroll={handleScroll}
         className="flex-1 overflow-y-auto divide-y divide-surfaceBorder/60"
       >
+        {/* Backlog Banner in backlog view */}
+        {filterTier === 'backlog' && (
+          <div className="p-3 bg-amber-500/10 border-b border-surfaceBorder/60 flex items-center justify-between gap-2">
+            <div className="text-[11px] text-amber-500/90 leading-tight">
+              <span className="font-semibold block">未读积压治理</span>
+              <span>发布超过 14 天且非精选/未收藏的普通与折叠未读</span>
+            </div>
+            <button
+              onClick={handleConfirmMarkBacklogRead}
+              disabled={(tierCounts?.backlog || 0) === 0 && articles.length === 0}
+              className="px-2.5 py-1 text-xs bg-amber-500 hover:bg-amber-400 text-zinc-950 font-semibold rounded-md transition-colors shrink-0 flex items-center gap-1 shadow-sm disabled:opacity-40"
+              title="一键将所有积压文章标记为已读（只改已读状态，不删文章）"
+            >
+              <CheckCheck size={13} />
+              <span>全部标为已读</span>
+            </button>
+          </div>
+        )}
+
         {clusteredItems.length === 0 ? (
           <div className="p-8 text-center text-textMuted text-xs flex flex-col items-center justify-center gap-2 h-64">
             <SlidersHorizontal size={24} className="opacity-30" />
             <p>
               {filterTier === 'hidden' 
                 ? '暂无被系统折叠的低价值内容（点击上方「推荐」即可切回正常流）' 
+                : filterTier === 'backlog'
+                ? '太棒了！当前没有超过 14 天的积压未读文章'
                 : '暂无符合当前筛选条件的文章'}
             </p>
           </div>

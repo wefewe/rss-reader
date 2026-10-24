@@ -30,6 +30,7 @@ export interface Article {
   image_alt?: string;
   is_read: boolean;
   is_starred: boolean;
+  is_backlog?: boolean;
   feedback?: 'like' | 'dislike' | null;
   value_score: number;
   value_tier: 'featured' | 'general' | 'hidden';
@@ -107,5 +108,5 @@ export interface ForumDigestStatus {
   latest_published_at?: string;
 }
 
-export type ViewType = 'all' | 'unread' | 'starred' | 'featured' | 'highlights';
+export type ViewType = 'all' | 'unread' | 'starred' | 'featured' | 'highlights' | 'backlog';
 export type ThemeMode = 'dark' | 'light' | 'sepia';

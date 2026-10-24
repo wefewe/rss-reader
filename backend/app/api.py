@@ -14,7 +14,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Body, Request, Upl
 from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import defer
-from sqlalchemy import select, update, delete, desc, func, or_, and_, cast, String, text, literal_column
+from sqlalchemy import select, update, delete, desc, func, or_, and_, not_, cast, String, text, literal_column
+from .config import settings, BACKLOG_THRESHOLD_DAYS, BACKLOG_VALUE_TIERS
 from .database import get_db
 from .models import FeedSource, Article, ReaderPreference, DigestRecord, ArticleHighlight, ForumStagingTopic
 from .schemas import (
@@ -391,6 +392,21 @@ def _clean_fts5_query(raw_query: str) -> str:
         return ""
     return " ".join(f'"{t}"' for t in tokens)
 
+def get_backlog_conditions(cutoff_dt: datetime.datetime):
+    """
+    WO-20261024-12 规则（积压定义，全部条件同时满足）：
+    1. is_read = 0（未读）
+    2. published_at 距今 > 14 天
+    3. value_tier 为 general 或 hidden（featured 永不沉底）
+    4. is_starred = 0（收藏永不沉底；当前虽为 0 条，规则要写死）
+    """
+    return [
+        Article.is_read == False,
+        Article.published_at < cutoff_dt,
+        Article.value_tier.in_(BACKLOG_VALUE_TIERS),
+        or_(Article.is_starred == False, Article.is_starred.is_(None)),
+    ]
+
 # 1. listreader
 @router.post("/listreader")
 @router.get("/listreader")
@@ -429,6 +445,10 @@ async def list_reader(
         await db.refresh(pref)
 
     # Build filter conditions
+    now_dt = datetime.datetime.utcnow()
+    cutoff_dt = now_dt - datetime.timedelta(days=BACKLOG_THRESHOLD_DAYS)
+    backlog_cond = and_(*get_backlog_conditions(cutoff_dt))
+
     filters = []
     if group_name and group_name != "全部":
         filters.append(Article.group_name == group_name)
@@ -440,6 +460,8 @@ async def list_reader(
         filters.append(Article.is_starred == True)
     elif view == "featured":
         filters.append(Article.value_tier == "featured")
+    elif view == "backlog":
+        filters.extend(get_backlog_conditions(cutoff_dt))
 
     search_filter = None
     if search and search.strip():
@@ -500,6 +522,9 @@ async def list_reader(
 
     if search_filter is not None:
         filters.append(search_filter)
+    elif view != "backlog":
+        # WO-20261024-12: 默认列表视图排除积压文章（搜索仍覆盖全部文章）
+        filters.append(not_(backlog_cond))
 
     # Count total matching articles for true pagination
     count_stmt = select(func.count(Article.id))
@@ -517,8 +542,14 @@ async def list_reader(
         tier_filters.append(Article.is_read == False)
     elif view == "starred":
         tier_filters.append(Article.is_starred == True)
+    elif view == "backlog":
+        tier_filters.extend(get_backlog_conditions(cutoff_dt))
+
     if search_filter is not None:
         tier_filters.append(search_filter)
+    elif view != "backlog":
+        # 默认视图（无搜索时）排除积压文章，确保推荐/精选/折叠分组与计数（N组 · M篇）基于排除后的集合
+        tier_filters.append(not_(backlog_cond))
 
     tier_stmt = select(Article.value_tier, func.count(Article.id))
     if tier_filters:
@@ -529,10 +560,25 @@ async def list_reader(
     featured_c = tier_map.get("featured", 0)
     general_c = tier_map.get("general", 0)
     hidden_c = tier_map.get("hidden", 0)
+
+    # 独立统计当前作用域下的积压篇数（不受 view 过滤影响，受 group/source/search 作用域限定）
+    backlog_count_filters = []
+    if group_name and group_name != "全部":
+        backlog_count_filters.append(Article.group_name == group_name)
+    if source_id:
+        backlog_count_filters.append(Article.source_id == source_id)
+    if search_filter is not None:
+        backlog_count_filters.append(search_filter)
+    backlog_count_filters.extend(get_backlog_conditions(cutoff_dt))
+
+    backlog_stmt = select(func.count(Article.id)).where(and_(*backlog_count_filters))
+    backlog_c = (await db.execute(backlog_stmt)).scalar() or 0
+
     tier_counts = {
         "normal": featured_c + general_c,
         "featured": featured_c,
         "hidden": hidden_c,
+        "backlog": backlog_c,
     }
 
     # Query paginated articles with deferred large text fields
@@ -586,6 +632,14 @@ async def list_reader(
                         "author": p.get("author", ""),
                     })
 
+        pub_dt = a.published_at.replace(tzinfo=None) if hasattr(a.published_at, 'tzinfo') and a.published_at.tzinfo else a.published_at
+        is_backlog = (
+            not a.is_read
+            and not a.is_starred
+            and a.value_tier in BACKLOG_VALUE_TIERS
+            and pub_dt < cutoff_dt
+        )
+
         schema = ArticleListItemSchema(
             id=a.id,
             source_id=a.source_id,
@@ -601,6 +655,7 @@ async def list_reader(
             image_alt=a.image_alt,
             is_read=a.is_read,
             is_starred=a.is_starred,
+            is_backlog=is_backlog,
             feedback=a.feedback,
             value_score=a.value_score,
             value_tier=a.value_tier,
@@ -1132,13 +1187,22 @@ async def mark_all_read(body: MarkAllReadInput, db: AsyncSession = Depends(get_d
     stmt = update(Article).values(is_read=True)
     if body.article_ids:
         stmt = stmt.where(Article.id.in_(body.article_ids))
+    elif body.backlog_only:
+        # WO-20261024-12 要求 3: 一键把当前积压文章标已读，只改 is_read 不删文章
+        cutoff_dt = datetime.datetime.utcnow() - datetime.timedelta(days=BACKLOG_THRESHOLD_DAYS)
+        stmt = stmt.where(and_(*get_backlog_conditions(cutoff_dt)))
+        if body.group_name and body.group_name != "全部":
+            stmt = stmt.where(Article.group_name == body.group_name)
+        if body.source_id:
+            stmt = stmt.where(Article.source_id == body.source_id)
     else:
         if body.group_name and body.group_name != "全部":
             stmt = stmt.where(Article.group_name == body.group_name)
         if body.source_id:
             stmt = stmt.where(Article.source_id == body.source_id)
 
-    await db.execute(stmt)
+    res = await db.execute(stmt)
+    affected = res.rowcount
     await db.commit()
 
     # Refresh counters for all sources
@@ -1147,7 +1211,7 @@ async def mark_all_read(body: MarkAllReadInput, db: AsyncSession = Depends(get_d
         await update_source_counters(db, s.id)
     await db.commit()
 
-    return {"status": "ok", "message": "已全部标记为已读"}
+    return {"status": "ok", "message": f"已将 {affected} 篇文章标记为已读", "count": affected}
 
 # 13. updatereaderpreferences
 @router.post("/updatereaderpreferences")

@@ -35,6 +35,7 @@ class ArticleSchema(BaseModel):
     image_alt: Optional[str] = None
     is_read: bool = False
     is_starred: bool = False
+    is_backlog: bool = False
     feedback: Optional[str] = None
     value_score: float = 0.5
     value_tier: str = "general"
@@ -70,6 +71,7 @@ class ArticleListItemSchema(BaseModel):
     image_alt: Optional[str] = None
     is_read: bool = False
     is_starred: bool = False
+    is_backlog: bool = False
     feedback: Optional[str] = None
     value_score: float = 0.5
     value_tier: str = "general"
@@ -172,6 +174,7 @@ class MarkAllReadInput(BaseModel):
     group_name: Optional[str] = None
     source_id: Optional[str] = None
     article_ids: Optional[List[str]] = None
+    backlog_only: Optional[bool] = False
 
 class DeleteSourceInput(BaseModel):
     id: str

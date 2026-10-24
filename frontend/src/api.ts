@@ -81,7 +81,7 @@ export async function listReader(params: {
   sources: FeedSource[];
   preferences: ReaderPreferences;
   last_checked_at: string;
-  tier_counts?: { normal: number; featured: number; hidden: number };
+  tier_counts?: { normal: number; featured: number; hidden: number; backlog?: number };
 }> {
   const query = new URLSearchParams();
   if (params.group_name && params.group_name !== '全部') query.set('group_name', params.group_name);
@@ -158,12 +158,18 @@ export async function setArticleFeedback(id: string, feedback: 'like' | 'dislike
   });
 }
 
-export async function markAllRead(params: { group_name?: string; source_id?: string; article_ids?: string[] }): Promise<void> {
-  await request(`${API_BASE}/markallread`, {
+export async function markAllRead(params: { group_name?: string; source_id?: string; article_ids?: string[]; backlog_only?: boolean }): Promise<{ status: string; message: string; count?: number }> {
+  const res = await request(`${API_BASE}/markallread`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(params),
   });
+  if (!res.ok) throw new Error(`Failed to mark read: ${res.statusText}`);
+  return res.json();
+}
+
+export async function markBacklogRead(params: { group_name?: string; source_id?: string } = {}): Promise<{ status: string; message: string; count?: number }> {
+  return markAllRead({ ...params, backlog_only: true });
 }
 
 export async function deleteSource(id: string): Promise<void> {

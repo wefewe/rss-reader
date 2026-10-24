@@ -17,6 +17,7 @@ import {
   setArticleStarred, 
   setArticleFeedback, 
   markAllRead,
+  markBacklogRead,
   fetchArticleFullText,
   summarizeArticle,
   checkAuth,
@@ -64,11 +65,12 @@ export const App: React.FC = () => {
   const [isLoadingMore, setIsLoadingMore] = useState<boolean>(false);
   const abortControllerRef = useRef<AbortController | null>(null);
 
-  const [filterTier, setFilterTier] = useState<string>('normal'); // 'normal' | 'featured' | 'hidden'
-  const [tierCounts, setTierCounts] = useState<{ normal: number; featured: number; hidden: number }>({
+  const [filterTier, setFilterTier] = useState<string>('normal'); // 'normal' | 'featured' | 'hidden' | 'backlog'
+  const [tierCounts, setTierCounts] = useState<{ normal: number; featured: number; hidden: number; backlog?: number }>({
     normal: 0,
     featured: 0,
     hidden: 0,
+    backlog: 0,
   });
   const [selectedArticleId, setSelectedArticleId] = useState<string | null>(null);
 
@@ -128,10 +130,11 @@ export const App: React.FC = () => {
     abortControllerRef.current = controller;
 
     try {
+      const effectiveView = filterTier === 'backlog' ? 'backlog' : currentView;
       const data = await listReader({
         group_name: currentGroup,
         source_id: currentSourceId || undefined,
-        view: currentView,
+        view: effectiveView,
         search: debouncedSearchQuery || undefined,
         sort: currentSort,
         offset: 0,
@@ -154,6 +157,7 @@ export const App: React.FC = () => {
           normal: data.articles.filter((a: Article) => a.value_tier !== 'hidden').length,
           featured: data.articles.filter((a: Article) => a.value_tier === 'featured').length,
           hidden: data.articles.filter((a: Article) => a.value_tier === 'hidden').length,
+          backlog: 0,
         });
       }
 
@@ -166,17 +170,18 @@ export const App: React.FC = () => {
         console.error('Failed to load reader data:', e);
       }
     }
-  }, [isAuthenticated, currentGroup, currentSourceId, currentView, debouncedSearchQuery, currentSort, selectedArticleId]);
+  }, [isAuthenticated, currentGroup, currentSourceId, currentView, filterTier, debouncedSearchQuery, currentSort, selectedArticleId]);
 
   // Load More Articles (incremental pagination)
   const handleLoadMore = useCallback(async () => {
     if (isLoadingMore || articles.length >= totalArticles) return;
     setIsLoadingMore(true);
     try {
+      const effectiveView = filterTier === 'backlog' ? 'backlog' : currentView;
       const data = await listReader({
         group_name: currentGroup,
         source_id: currentSourceId || undefined,
-        view: currentView,
+        view: effectiveView,
         search: debouncedSearchQuery || undefined,
         sort: currentSort,
         offset: articles.length,
@@ -195,7 +200,7 @@ export const App: React.FC = () => {
     } finally {
       setIsLoadingMore(false);
     }
-  }, [isLoadingMore, articles.length, totalArticles, currentGroup, currentSourceId, currentView, debouncedSearchQuery, currentSort]);
+  }, [isLoadingMore, articles.length, totalArticles, currentGroup, currentSourceId, currentView, filterTier, debouncedSearchQuery, currentSort]);
 
   useEffect(() => {
     if (isAuthenticated) {
@@ -324,6 +329,20 @@ export const App: React.FC = () => {
       loadData();
     } catch (e) {
       console.error(e);
+    }
+  };
+
+  const handleMarkBacklogRead = async () => {
+    try {
+      const res = await markBacklogRead({
+        group_name: currentGroup !== '全部' ? currentGroup : undefined,
+        source_id: currentSourceId || undefined,
+      });
+      alert(res.message || '积压文章已全部标记为已读');
+      loadData();
+    } catch (e: any) {
+      console.error(e);
+      alert(e?.message || '标记积压已读失败');
     }
   };
 
@@ -486,14 +505,17 @@ export const App: React.FC = () => {
           onSelectGroup={(g) => { 
             setCurrentGroup(g); 
             setCurrentSourceId(''); 
+            setFilterTier('normal');
             setMobileView('list'); 
           }}
           onSelectSource={(s) => { 
             setCurrentSourceId(s); 
+            setFilterTier('normal');
             setMobileView('list'); 
           }}
           onSelectView={(v) => { 
             setCurrentView(v); 
+            setFilterTier('normal');
             setMobileView('list'); 
           }}
           onSelectTheme={setTheme}
@@ -525,6 +547,7 @@ export const App: React.FC = () => {
               onToggleStar={handleToggleStar}
               onFeedback={handleFeedback}
               onMarkAllRead={handleMarkAllRead}
+              onMarkBacklogRead={handleMarkBacklogRead}
               onMarkBatchRead={handleMarkBatchRead}
               searchQuery={searchQuery}
               onSearchChange={setSearchQuery}

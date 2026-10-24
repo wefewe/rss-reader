@@ -91,6 +91,13 @@ export const ArticleCard: React.FC<ArticleCardProps> = ({
             </span>
           ) : null}
 
+          {/* Backlog Badge (WO-20261024-12) */}
+          {article.is_backlog && (
+            <span className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.2 rounded font-medium bg-amber-500/15 text-amber-500 border border-amber-500/25" title="超过14天未读的低价值积压内容">
+              积压
+            </span>
+          )}
+
           {/* Top Triage Signal Tag */}
           {!isForumDigest && topSignal && article.value_tier !== 'hidden' && (
             <span className={`text-[9px] px-1.5 py-0.2 rounded font-medium truncate max-w-[90px] ${
