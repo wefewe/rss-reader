@@ -108,8 +108,13 @@ if os.path.exists(static_dir):
     async def serve_spa(full_path: str):
         file_path = os.path.join(static_dir, full_path)
         if full_path and os.path.exists(file_path) and os.path.isfile(file_path):
-            return FileResponse(file_path)
-        return FileResponse(os.path.join(static_dir, "index.html"))
+            resp = FileResponse(file_path)
+            if full_path in ("sw.js", "manifest.json"):
+                resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+            return resp
+        resp = FileResponse(os.path.join(static_dir, "index.html"))
+        resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        return resp
 
 if __name__ == "__main__":
     import uvicorn
