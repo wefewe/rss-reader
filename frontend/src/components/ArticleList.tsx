@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Search, SlidersHorizontal, CheckCheck, Check, ArrowLeft, Wand2, Layers } from 'lucide-react';
+import { Search, SlidersHorizontal, CheckCheck, Check, ArrowLeft, Wand2, Layers, AlertCircle } from 'lucide-react';
 import { Article, ViewType } from '../types';
 import { ArticleCard } from './ArticleCard';
 
@@ -55,6 +55,7 @@ export const ArticleList: React.FC<ArticleListProps> = ({
   const [isClustered, setIsClustered] = useState<boolean>(() => {
     return localStorage.getItem('reader_cluster') !== 'false';
   });
+  const [isBacklogModalOpen, setIsBacklogModalOpen] = useState<boolean>(false);
 
   useEffect(() => {
     localStorage.setItem('reader_debuzz', String(isDebuzz));
@@ -63,6 +64,18 @@ export const ArticleList: React.FC<ArticleListProps> = ({
   useEffect(() => {
     localStorage.setItem('reader_cluster', String(isClustered));
   }, [isClustered]);
+
+  // Escape key to dismiss backlog confirmation modal
+  useEffect(() => {
+    if (!isBacklogModalOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setIsBacklogModalOpen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isBacklogModalOpen]);
 
   // Filter by value tier (featured / all / hidden / backlog)
   const filteredArticles = useMemo(() => {
@@ -160,14 +173,16 @@ export const ArticleList: React.FC<ArticleListProps> = ({
     }
   };
 
-  const handleConfirmMarkBacklogRead = () => {
-    const count = tierCounts?.backlog ?? articles.length;
-    if (window.confirm(`确定将当前全部 ${count} 篇积压文章标记为已读吗？\n\n此操作仅改变已读状态，文章仍会完整保存在数据库中，可在搜索中继续随时查阅。`)) {
-      if (onMarkBacklogRead) {
-        onMarkBacklogRead();
-      } else {
-        onMarkAllRead();
-      }
+  const handleOpenBacklogConfirm = () => {
+    setIsBacklogModalOpen(true);
+  };
+
+  const handleExecuteMarkBacklogRead = () => {
+    setIsBacklogModalOpen(false);
+    if (onMarkBacklogRead) {
+      onMarkBacklogRead();
+    } else {
+      onMarkAllRead();
     }
   };
 
@@ -306,9 +321,9 @@ export const ArticleList: React.FC<ArticleListProps> = ({
 
             {filterTier === 'backlog' ? (
               <button
-                onClick={handleConfirmMarkBacklogRead}
+                onClick={handleOpenBacklogConfirm}
                 disabled={(tierCounts?.backlog || 0) === 0 && articles.length === 0}
-                title="全部积压标为已读（二次确认）"
+                title="全部积压标为已读（应用内二次确认）"
                 className="flex items-center gap-1 text-amber-500 hover:text-amber-400 transition-colors px-1.5 py-0.5 rounded bg-amber-500/10 hover:bg-amber-500/20 font-medium disabled:opacity-40"
               >
                 <CheckCheck size={13} />
@@ -341,7 +356,7 @@ export const ArticleList: React.FC<ArticleListProps> = ({
               <span>发布超过 14 天且非精选/未收藏的普通与折叠未读</span>
             </div>
             <button
-              onClick={handleConfirmMarkBacklogRead}
+              onClick={handleOpenBacklogConfirm}
               disabled={(tierCounts?.backlog || 0) === 0 && articles.length === 0}
               className="px-2.5 py-1 text-xs bg-amber-500 hover:bg-amber-400 text-zinc-950 font-semibold rounded-md transition-colors shrink-0 flex items-center gap-1 shadow-sm disabled:opacity-40"
               title="一键将所有积压文章标记为已读（只改已读状态，不删文章）"
@@ -405,6 +420,56 @@ export const ArticleList: React.FC<ArticleListProps> = ({
           </>
         )}
       </div>
+
+      {/* Backlog Mark Read Application Modal */}
+      {isBacklogModalOpen && (
+        <div 
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs"
+          onClick={() => setIsBacklogModalOpen(false)}
+        >
+          <div 
+            className="w-full max-w-sm bg-surface border border-surfaceBorder rounded-2xl shadow-2xl p-5 flex flex-col gap-4 animate-in fade-in zoom-in-95 duration-150 select-none"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start gap-3">
+              <div className="p-2.5 rounded-xl bg-amber-500/15 text-amber-500 shrink-0">
+                <AlertCircle size={22} />
+              </div>
+              <div className="flex-1 min-w-0">
+                <h3 className="text-sm font-semibold text-textPrimary leading-snug">
+                  全部标为已读确认
+                </h3>
+                <p className="text-xs text-textMuted mt-1 leading-relaxed">
+                  将把当前全部 <span className="font-semibold text-amber-500 font-mono">{tierCounts?.backlog ?? articles.length} 篇</span> 积压文章标记为已读。
+                </p>
+              </div>
+            </div>
+
+            <div className="p-3 rounded-xl bg-surfaceRaised/70 border border-surfaceBorder/80 text-[11px] text-textMuted leading-relaxed">
+              <span className="font-medium text-textPrimary block mb-0.5">安全须知</span>
+              此操作<strong className="text-textPrimary font-semibold">只改已读状态，不删文章</strong>。标记后文章将脱离积压列表，但完整保留在数据库中，后续仍可在搜索中随时检索阅读。
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setIsBacklogModalOpen(false)}
+                className="px-3 py-1.5 rounded-lg text-xs font-medium text-textMuted hover:text-textPrimary hover:bg-surfaceRaised transition-colors"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={handleExecuteMarkBacklogRead}
+                className="px-3.5 py-1.5 rounded-lg text-xs bg-amber-500 hover:bg-amber-400 text-zinc-950 font-semibold transition-colors flex items-center gap-1.5 shadow-sm"
+              >
+                <CheckCheck size={14} />
+                <span>确认全部标为已读</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
