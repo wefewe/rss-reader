@@ -416,9 +416,27 @@ export const App: React.FC = () => {
   // Keyboard navigation shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Prevent hotkey collision with browser native modifier combinations (Cmd+S, Ctrl+Z, etc.)
+      if (e.metaKey || e.ctrlKey || e.altKey) {
+        return;
+      }
+
+      // Ignore key events inside inputs/textareas
       if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName)) {
         if (e.key === 'Escape') {
           (e.target as HTMLElement).blur();
+        }
+        return;
+      }
+
+      // Modal isolation: only allow Escape (or '?' for shortcut modal) to close, suppress all other single-key actions
+      const isAnyModalOpen = isSettingsModalOpen || isBriefModalOpen || isAddSourceModalOpen || isShortcutHelpOpen;
+      if (isAnyModalOpen) {
+        if (e.key === 'Escape' || (e.key === '?' && isShortcutHelpOpen)) {
+          if (isShortcutHelpOpen) setIsShortcutHelpOpen(false);
+          if (isSettingsModalOpen) setIsSettingsModalOpen(false);
+          if (isBriefModalOpen) setIsBriefModalOpen(false);
+          if (isAddSourceModalOpen) setIsAddSourceModalOpen(false);
         }
         return;
       }
@@ -469,7 +487,17 @@ export const App: React.FC = () => {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [articles, selectedArticleId, selectedArticle, handleSelectArticle, handleToggleStar]);
+  }, [
+    articles, 
+    selectedArticleId, 
+    selectedArticle, 
+    handleSelectArticle, 
+    handleToggleStar,
+    isSettingsModalOpen,
+    isBriefModalOpen,
+    isAddSourceModalOpen,
+    isShortcutHelpOpen
+  ]);
 
   const totalUnread = useMemo(() => {
     return sources.reduce((acc, s) => acc + s.unread_count, 0);

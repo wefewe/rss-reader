@@ -78,9 +78,11 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const progressBarRef = useRef<HTMLDivElement>(null);
   const progressTextRef = useRef<HTMLSpanElement>(null);
+  const typographyRef = useRef<HTMLDivElement>(null);
   const [activeLightboxImg, setActiveLightboxImg] = useState<string | null>(null);
   const [isCopied, setIsCopied] = useState<boolean>(false);
   const [isTypographyOpen, setIsTypographyOpen] = useState<boolean>(false);
+  const [leadImageFailed, setLeadImageFailed] = useState<boolean>(false);
   const [isSendingTg, setIsSendingTg] = useState<boolean>(false);
   const [tgSentSuccess, setTgSentSuccess] = useState<boolean>(false);
 
@@ -231,7 +233,23 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     localStorage.setItem('reader_bionic_reading', String(isBionicReading));
   }, [isBionicReading]);
 
-  // Reset scroll, progress indicators and lightbox on article change
+  // Click-Outside auto-dismiss for typography popover
+  useEffect(() => {
+    if (!isTypographyOpen) return;
+    const handleClickOutside = (e: MouseEvent | TouchEvent) => {
+      if (typographyRef.current && e.target instanceof Node && !typographyRef.current.contains(e.target)) {
+        setIsTypographyOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('touchstart', handleClickOutside, { passive: true });
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('touchstart', handleClickOutside);
+    };
+  }, [isTypographyOpen]);
+
+  // Reset scroll, progress indicators, lightbox, and lead image failed state on article change
   useEffect(() => {
     if (scrollContainerRef.current) {
       scrollContainerRef.current.scrollTop = 0;
@@ -244,7 +262,8 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     }
     setActiveLightboxImg(null);
     setShowBackToTop(false);
-  }, [article?.id]);
+    setLeadImageFailed(false);
+  }, [article?.id, article?.image_url]);
 
   const handleScroll = () => {
     if (!scrollContainerRef.current) return;
@@ -359,7 +378,10 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
             )}
           </button>
         </div>
-        <pre className="p-3.5 sm:p-4 overflow-x-auto text-xs leading-relaxed font-mono text-textPrimary/95 bg-transparent m-0 select-text">
+        <pre 
+          className="p-3.5 sm:p-4 overflow-x-auto leading-relaxed font-mono text-textPrimary/95 bg-transparent m-0 select-text"
+          style={{ fontSize: `max(12px, ${fontSize - 2}px)` }}
+        >
           <code className="bg-transparent p-0 border-0 text-inherit font-inherit">
             {rawCode}
           </code>
@@ -371,11 +393,11 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
   // Stable markdown components definition to prevent re-mounting during re-renders
   const markdownComponents = useMemo(() => ({
     p: ({ children }: any) => {
-      if (!isBionicReading) return <p className="mb-4 leading-relaxed">{children}</p>;
+      if (!isBionicReading) return <p className="mb-4">{children}</p>;
       if (typeof children === 'string') {
-        return <p className="mb-4 leading-relaxed">{formatBionicContent(children)}</p>;
+        return <p className="mb-4">{formatBionicContent(children)}</p>;
       }
-      return <p className="mb-4 leading-relaxed">{children}</p>;
+      return <p className="mb-4">{children}</p>;
     },
     code: CodeBlockComponent,
     pre: ({ children }: any) => <>{children}</>,
@@ -427,7 +449,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
         </a>
       );
     }
-  }), [isBionicReading]);
+  }), [isBionicReading, fontSize]);
 
   const wordStats = useMemo(() => {
     if (!article) return { chars: 0, minutes: 1 };
@@ -601,7 +623,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
         {/* Right Tools: Typography Aa, Copy, Zen, Jump Original */}
         <div className="flex items-center gap-2">
           {/* Typography Aa Control Button */}
-          <div className="relative">
+          <div className="relative" ref={typographyRef}>
             <button
               onClick={() => setIsTypographyOpen(!isTypographyOpen)}
               className={`p-1.5 rounded-lg text-xs flex items-center gap-1 transition-colors ${
@@ -983,7 +1005,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
           />
 
           {/* Lead Image with Lightbox click */}
-          {article.image_url && (
+          {article.image_url && !leadImageFailed && (
             <div 
               onClick={() => setActiveLightboxImg(article.image_url || null)}
               className="rounded-xl overflow-hidden border border-surfaceBorder max-h-[420px] bg-surface flex items-center justify-center cursor-zoom-in group relative"
@@ -993,6 +1015,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
                 alt={article.image_alt || article.title}
                 className="w-full h-auto object-cover max-h-[420px] group-hover:scale-[1.01] transition-transform duration-200"
                 onImageClick={(validSrc) => setActiveLightboxImg(validSrc)}
+                onError={() => setLeadImageFailed(true)}
               />
               <span className="absolute bottom-2 right-2 px-2 py-0.5 rounded bg-black/60 text-white text-[10px] opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
                 点击放大图片
@@ -1081,7 +1104,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
                 <span className="font-mono text-textMuted/70">正在载入文章正文...</span>
               </div>
             ) : (isBilingualMode ? (bilingualContent || article.bilingual_content || effectiveContent) : effectiveContent) ? (
-              <div className="prose max-w-none break-words leading-relaxed space-y-4">
+              <div className="prose max-w-none break-words space-y-4">
                 <ReactMarkdown components={markdownComponents}>
                   {(isBilingualMode ? (bilingualContent || article.bilingual_content || effectiveContent) : effectiveContent) || ''}
                 </ReactMarkdown>
